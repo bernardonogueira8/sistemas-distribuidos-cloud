@@ -5,4 +5,3 @@ variable "db_tier" { type = string }
 variable "deletion_protection" { type = bool }
 variable "labels" { type = map(string) }
 variable "runtime_service_account" { type = string }
-variable "schema_service_account" { type = string }

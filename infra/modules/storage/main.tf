@@ -39,7 +39,6 @@ resource "google_service_account_iam_member" "sign_blob" {
 resource "google_artifact_registry_repository_iam_member" "reader" {
   for_each = {
     runtime = var.runtime_service_account
-    schema  = var.schema_service_account
   }
   location   = var.region
   repository = google_artifact_registry_repository.app.name

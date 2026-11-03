@@ -1,5 +1,5 @@
 output "deployment" {
-  description = "Nonsecret deployment contract for build, private schema task, and health scripts. SQL credentials remain in Secret Manager and Terraform state; both identities use the same SQL user, not SQL least privilege."
+  description = "Nonsecret deployment contract for build, Auth Proxy schema task, and health scripts. SQL credentials remain in Secret Manager and Terraform state."
   value = {
     name                    = var.name
     project_id              = var.project_id
@@ -7,11 +7,11 @@ output "deployment" {
     zones                   = var.zones
     network                 = module.network.network
     subnetwork              = module.network.subnetwork
-    schema_service_account  = google_service_account.schema.email
     runtime_service_account = google_service_account.runtime.email
     runtime_secret_id       = module.database.runtime_secret_id
     runtime_secret_version  = module.database.runtime_secret_version
     db_instance             = module.database.db_instance
+    db_connection_name      = module.database.db_connection_name
     db_host                 = module.database.db_host
     db_name                 = module.database.db_name
     bucket                  = module.storage.bucket

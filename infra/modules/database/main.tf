@@ -14,7 +14,7 @@ resource "google_sql_database_instance" "app" {
     deletion_protection_enabled = var.deletion_protection
     user_labels                 = var.labels
     ip_configuration {
-      ipv4_enabled                                  = false
+      ipv4_enabled                                  = true
       private_network                               = var.network
       enable_private_path_for_google_cloud_services = true
       ssl_mode                                      = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
@@ -73,7 +73,6 @@ resource "google_secret_manager_secret_version" "runtime" {
 resource "google_secret_manager_secret_iam_member" "access" {
   for_each = {
     runtime = var.runtime_service_account
-    schema  = var.schema_service_account
   }
   secret_id = google_secret_manager_secret.runtime.id
   role      = "roles/secretmanager.secretAccessor"

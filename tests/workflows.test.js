@@ -143,17 +143,17 @@ test('schema and private initialization failures stop execution without printing
     assert.notEqual(schemaResult.status, 0);
     assert.doesNotMatch(schemaResult.stdout + schemaResult.stderr, /sensitive|UNREACHABLE/);
     assert.match(schemaResult.stderr, /Schema operation failed/);
-    const timedOutSchema = runScript(`bash() { printf 'Timed out waiting for schema task during image-pull.\\n' >&2; return 1; }\n${schema.run}`, {
-      env: { RUNNER_TEMP: temporary, IMAGE: 'unused' },
-    });
-    assert.notEqual(timedOutSchema.status, 0);
-    assert.match(timedOutSchema.stderr, /Schema task timed out during image-pull/);
-    assert.doesNotMatch(timedOutSchema.stdout + timedOutSchema.stderr, /sensitive|UNREACHABLE/);
     const stagedSchemaFailure = runScript(`bash() { printf 'Schema task failed during schema-apply.\\nsensitive schema diagnostic\\n' >&2; return 7; }\n${schema.run}`, {
       env: { RUNNER_TEMP: temporary, IMAGE: 'unused' },
     });
     assert.notEqual(stagedSchemaFailure.status, 0);
-    assert.match(stagedSchemaFailure.stderr, /Schema operation failed during schema-apply/);
+    assert.match(stagedSchemaFailure.stderr, /Schema operation failed\./);
+    const stagedProxyFailure = runScript(`bash() { printf 'Schema operation failed during proxy-start.\\nsensitive proxy diagnostic\\n' >&2; return 7; }\n${schema.run}`, {
+      env: { RUNNER_TEMP: temporary, IMAGE: 'unused' },
+    });
+    assert.notEqual(stagedProxyFailure.status, 0);
+    assert.match(stagedProxyFailure.stderr, /Schema operation failed during proxy-start/);
+    assert.doesNotMatch(stagedProxyFailure.stdout + stagedProxyFailure.stderr, /sensitive|UNREACHABLE/);
     assert.doesNotMatch(stagedSchemaFailure.stdout + stagedSchemaFailure.stderr, /sensitive|UNREACHABLE/);
     const deployment = steps.find((step) => step.id === 'deployment');
     const failedInit = runScript(`terraform() { printf 'sensitive init diagnostic\\n' >&2; return 9; }\n${deployment.run}\nprintf 'UNREACHABLE'`, {

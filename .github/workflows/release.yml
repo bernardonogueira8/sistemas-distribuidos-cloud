@@ -105,11 +105,9 @@ jobs:
         run: |
           umask 077
           if ! bash scripts/apply-schema-gcp.sh "$IMAGE" > "$RUNNER_TEMP/gcp-deployment/schema.log" 2>&1; then
-            failure_reason=$(sed -nE 's/^Schema task failed during (startup|docker|metadata|image-pull|secret-access|schema-apply|unknown)\.$/failed:\1/p; s/^Timed out waiting for schema task during (startup|docker|metadata|image-pull|secret-access|schema-apply|unknown)\.$/timeout:\1/p' "$RUNNER_TEMP/gcp-deployment/schema.log" | head -n 1)
-            if [[ "$failure_reason" == timeout:* ]]; then
-              printf 'Schema task timed out during %s.\n' "${failure_reason#timeout:}" >&2
-            elif [[ "$failure_reason" == failed:* ]]; then
-              printf 'Schema operation failed during %s.\n' "${failure_reason#failed:}" >&2
+            failure_stage=$(sed -nE 's/^Schema operation failed during (credentials|secret-fetch|proxy-start|schema-apply|cleanup)\.$/\1/p' "$RUNNER_TEMP/gcp-deployment/schema.log" | head -n 1)
+            if [[ -n "$failure_stage" ]]; then
+              printf 'Schema operation failed during %s.\n' "$failure_stage" >&2
             else
               printf 'Schema operation failed.\n' >&2
             fi

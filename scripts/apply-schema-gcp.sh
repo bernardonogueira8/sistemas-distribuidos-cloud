@@ -8,13 +8,12 @@ if [[ $# -ne 1 ]]; then
 fi
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 IMAGE=$1
-TIMEOUT=${SCHEMA_TIMEOUT_SECONDS:-900}
-POLL=${SCHEMA_POLL_SECONDS:-10}
-[[ "$TIMEOUT" =~ ^[1-9][0-9]{0,4}$ && "$POLL" =~ ^[1-9][0-9]{0,3}$ ]] || {
-  printf 'Invalid schema timeout or poll interval.\n' >&2
+ATTEMPTS=${SCHEMA_CONNECT_ATTEMPTS:-15}
+[[ "$ATTEMPTS" =~ ^[1-9][0-9]?$ ]] && (( ATTEMPTS <= 60 )) || {
+  printf 'Invalid schema connection attempts.\n' >&2
   exit 2
 }
-for tool in terraform jq gcloud; do
+for tool in terraform jq gcloud docker; do
   command -v "$tool" >/dev/null || { printf 'Missing command: %s\n' "$tool" >&2; exit 2; }
 done
 
@@ -22,84 +21,96 @@ DEPLOYMENT=$(terraform -chdir="$ROOT/infra" output -json deployment | jq -ce '
   select(type == "object") |
   select(.project_id | type == "string" and test("^[a-z][a-z0-9-]{4,61}[a-z0-9]$")) |
   select(.region | type == "string" and test("^[a-z]+-[a-z]+[0-9]+$")) |
-  select(.subnetwork | type == "string" and test("^(https://www.googleapis.com/compute/v1/)?projects/[a-z0-9-]+/regions/[a-z0-9-]+/subnetworks/[a-z0-9-]+$")) |
-  select(.schema_service_account | type == "string" and test("^[a-z0-9-]+@[a-z0-9-]+\\.iam\\.gserviceaccount\\.com$")) |
+  select(.db_connection_name | type == "string" and test("^[a-z][a-z0-9-]{4,61}[a-z0-9]:[a-z]+-[a-z]+[0-9]+:[a-z][a-z0-9-]{0,61}[a-z0-9]$")) |
   select(.runtime_secret_id | type == "string" and test("^[A-Za-z0-9_-]{1,255}$")) |
   select(.db_host | type == "string" and test("^[A-Za-z0-9.-]+$")) |
   select(.db_name | type == "string" and test("^[A-Za-z0-9_]+$")) |
-  select(.registry | type == "string" and test("^[a-z0-9-]+-docker\\.pkg\\.dev/[a-z0-9-]+/[a-z0-9_-]+$")) |
-  select(.zones | type == "array" and length > 0) |
-  select(all(.zones[]; type == "string" and test("^[a-z]+-[a-z]+[0-9]+-[a-z]$"))) |
-  select(.region as $region | all(.zones[]; startswith($region + "-")))
+  select(.registry | type == "string" and test("^[a-z0-9-]+-docker\\.pkg\\.dev/[a-z0-9-]+/[a-z0-9_-]+$"))
 ')
 PROJECT=$(jq -r '.project_id' <<< "$DEPLOYMENT")
 REGION=$(jq -r '.region' <<< "$DEPLOYMENT")
-SUBNETWORK=$(jq -r '.subnetwork' <<< "$DEPLOYMENT")
-ACCOUNT=$(jq -r '.schema_service_account' <<< "$DEPLOYMENT")
+CONNECTION_NAME=$(jq -r '.db_connection_name' <<< "$DEPLOYMENT")
 SECRET=$(jq -r '.runtime_secret_id' <<< "$DEPLOYMENT")
-DB_HOST=$(jq -r '.db_host' <<< "$DEPLOYMENT")
 DB_NAME=$(jq -r '.db_name' <<< "$DEPLOYMENT")
 REGISTRY=$(jq -r '.registry' <<< "$DEPLOYMENT")
-ZONE=$(jq -r '.zones[0]' <<< "$DEPLOYMENT")
-[[ "$SUBNETWORK" == *"/projects/$PROJECT/regions/$REGION/"* || "$SUBNETWORK" == "projects/$PROJECT/regions/$REGION/"* ]] || exit 2
 [[ "$IMAGE" == "$REGISTRY/"* && "${IMAGE#"$REGISTRY/"}" =~ ^[a-z0-9]+([._/-][a-z0-9]+)*@sha256:[a-f0-9]{64}$ ]] || {
   printf 'Image must belong to deployment.registry and use an immutable sha256 digest.\n' >&2
   exit 2
 }
 
-VM="schema-$(date +%s)-${RANDOM}"
-CREATED=0
+CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-${GOOGLE_GHA_CREDS_PATH:-}}
+if [[ -z "$CREDENTIALS" && -n "${HOME:-}" ]]; then
+  CREDENTIALS="$HOME/.config/gcloud/application_default_credentials.json"
+fi
+[[ -r "$CREDENTIALS" ]] || {
+  printf 'Schema operation failed during credentials.\n' >&2
+  exit 1
+}
+
+WORK_ROOT=${RUNNER_TEMP:-${TMPDIR:-/tmp}}
+WORK="$WORK_ROOT/schema-task-$$-${RANDOM}"
+mkdir -m 700 -- "$WORK"
+ENV_FILE="$WORK/mysql.env"
+NETWORK="schema-net-$$-${RANDOM}"
+PROXY="schema-proxy-$$-${RANDOM}"
+PROXY_IMAGE=gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.27.0
+NETWORK_CREATED=0
+PROXY_CREATED=0
 cleanup() {
   local result=$?
+  local cleanup_failed=0
   trap - EXIT
-  if [[ "$CREATED" -eq 1 ]]; then
-    if ! gcloud compute instances delete "$VM" --project="$PROJECT" --zone="$ZONE" --quiet; then
-      printf 'Cleanup failed; delete instance %s in project %s, zone %s.\n' "$VM" "$PROJECT" "$ZONE" >&2
-      result=1
-    fi
+  if [[ "$PROXY_CREATED" -eq 1 ]] && ! docker rm --force "$PROXY" >/dev/null 2>&1; then
+    cleanup_failed=1
+  fi
+  if [[ "$NETWORK_CREATED" -eq 1 ]] && ! docker network rm "$NETWORK" >/dev/null 2>&1; then cleanup_failed=1; fi
+  rm -rf -- "$WORK"
+  if [[ "$cleanup_failed" -eq 1 ]]; then
+    printf 'Schema operation failed during cleanup.\n' >&2
+    result=1
   fi
   exit "$result"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-CREATED=1
-gcloud compute instances create "$VM" --project="$PROJECT" --zone="$ZONE" --quiet \
-  --machine-type=e2-small --image-family=cos-stable --image-project=cos-cloud \
-  --subnet="$SUBNETWORK" --no-address --service-account="$ACCOUNT" \
-  --scopes=https://www.googleapis.com/auth/cloud-platform \
-  --metadata="enable-guest-attributes=TRUE,schema-image=$IMAGE,schema-registry=${REGISTRY%%/*},schema-project=$PROJECT,schema-secret=$SECRET,schema-db-host=$DB_HOST,schema-db-name=$DB_NAME" \
-  --metadata-from-file="startup-script=$ROOT/scripts/schema-startup.sh.tftpl" >/dev/null
+if ! SECRET_PAYLOAD=$(gcloud secrets versions access latest --secret="$SECRET" --project="$PROJECT" 2>/dev/null); then
+  printf 'Schema operation failed during secret-fetch.\n' >&2
+  exit 1
+fi
+if ! DB_USER=$(jq -er '.DB_USER | select(type == "string" and test("^[A-Za-z0-9_]+$"))' <<< "$SECRET_PAYLOAD" 2>/dev/null) || \
+  ! DB_PASSWORD=$(jq -er '.DB_PASSWORD | select(type == "string" and test("^[A-Za-z0-9]+$"))' <<< "$SECRET_PAYLOAD" 2>/dev/null); then
+  unset SECRET_PAYLOAD
+  printf 'Schema operation failed during secret-fetch.\n' >&2
+  exit 1
+fi
+unset SECRET_PAYLOAD
+printf 'DB_HOST=cloud-sql-proxy\nDB_PORT=3306\nDB_NAME=%s\nDB_USER=%s\nDB_PASSWORD=%s\n' \
+  "$DB_NAME" "$DB_USER" "$DB_PASSWORD" > "$ENV_FILE"
+unset DB_PASSWORD
+chmod 600 "$ENV_FILE"
 
-DEADLINE=$((SECONDS + TIMEOUT))
-GUEST_ATTRIBUTES='{}'
-while (( SECONDS < DEADLINE )); do
-  GUEST_ATTRIBUTES=$(gcloud compute instances get-guest-attributes "$VM" --project="$PROJECT" --zone="$ZONE" \
-    --query-path=schema --format=json 2>/dev/null || true)
-  STATUS=$(jq -er '[.queryValue.items[]? | select(.key == "status") | .value] | if length == 1 then .[0] else empty end' <<< "$GUEST_ATTRIBUTES" 2>/dev/null || true)
-  case "$STATUS" in
-    success) printf 'Schema applied successfully.\n'; exit 0 ;;
-    failed)
-      FAILURE_STAGE=$(jq -er '[.queryValue.items[]? | select(.key == "failure-stage") | .value] | if length == 1 then .[0] else empty end' <<< "$GUEST_ATTRIBUTES" 2>/dev/null || true)
-      case "$FAILURE_STAGE" in
-        startup|docker|metadata|image-pull|secret-access|schema-apply) ;;
-        *) FAILURE_STAGE=unknown ;;
-      esac
-      printf 'Schema task failed during %s.\n' "$FAILURE_STAGE" >&2
-      exit 1 ;;
-    '') ;;
-    *) printf 'Unexpected schema task status.\n' >&2; exit 1 ;;
-  esac
-  REMAINING=$((DEADLINE - SECONDS))
-  (( REMAINING > 0 )) || break
-  INTERVAL=$POLL
-  (( INTERVAL <= REMAINING )) || INTERVAL=$REMAINING
-  sleep "$INTERVAL"
+if ! docker network create "$NETWORK" >/dev/null 2>&1; then
+  printf 'Schema operation failed during proxy-start.\n' >&2
+  exit 1
+fi
+NETWORK_CREATED=1
+PROXY_CREATED=1
+if ! docker run --detach --name "$PROXY" --network "$NETWORK" --network-alias cloud-sql-proxy \
+  --mount "type=bind,src=$CREDENTIALS,dst=/credentials.json,readonly" \
+  "$PROXY_IMAGE" --address 0.0.0.0 --port 3306 --credentials-file /credentials.json "$CONNECTION_NAME" \
+  >/dev/null 2>&1; then
+  printf 'Schema operation failed during proxy-start.\n' >&2
+  exit 1
+fi
+
+for attempt in $(seq 1 "$ATTEMPTS"); do
+  if docker run --rm --network "$NETWORK" --log-driver none --env-file "$ENV_FILE" \
+    --entrypoint node "$IMAGE" src/db/apply-schema.js >/dev/null 2>&1; then
+    printf 'Schema applied successfully.\n'
+    exit 0
+  fi
+  if (( attempt < ATTEMPTS )); then sleep 2; fi
 done
-LAST_STAGE=$(jq -er '[.queryValue.items[]? | select(.key == "stage") | .value] | if length == 1 then .[0] else empty end' <<< "$GUEST_ATTRIBUTES" 2>/dev/null || true)
-case "$LAST_STAGE" in
-  startup|docker|metadata|image-pull|secret-access|schema-apply) ;;
-  *) LAST_STAGE=unknown ;;
-esac
-printf 'Timed out waiting for schema task during %s.\n' "$LAST_STAGE" >&2
+printf 'Schema operation failed during schema-apply.\n' >&2
 exit 1

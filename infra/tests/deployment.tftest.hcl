@@ -50,8 +50,8 @@ run "initial_infrastructure_without_image" {
     error_message = "The repository must be available before the image is built."
   }
   assert {
-    condition     = google_service_account.runtime.account_id != google_service_account.schema.account_id
-    error_message = "Schema tasks and runtime must have distinct Google identities."
+    condition     = google_service_account.runtime.account_id == "distributed-cloud-run" && !can(output.deployment.schema_service_account)
+    error_message = "The deployment contract must not retain an unused schema VM identity."
   }
   assert {
     condition     = !issensitive(output.deployment) && !can(output.deployment.DB_PASSWORD) && !can(output.deployment.password) && !can(output.deployment.secret_data)

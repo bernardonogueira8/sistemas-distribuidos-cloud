@@ -22,7 +22,7 @@ run "private_network" {
   }
 }
 
-run "private_database_and_shared_sql_identity" {
+run "public_proxy_database_and_shared_sql_identity" {
   command = apply
   module { source = "./modules/database" }
   variables {
@@ -33,11 +33,10 @@ run "private_database_and_shared_sql_identity" {
     deletion_protection     = true
     labels                  = {}
     runtime_service_account = "runtime@example-project.iam.gserviceaccount.com"
-    schema_service_account  = "schema@example-project.iam.gserviceaccount.com"
   }
   assert {
-    condition     = !google_sql_database_instance.app.settings[0].ip_configuration[0].ipv4_enabled && length(google_sql_database_instance.app.settings[0].ip_configuration[0].authorized_networks) == 0
-    error_message = "Cloud SQL must have no public IP or public authorized networks."
+    condition     = google_sql_database_instance.app.settings[0].ip_configuration[0].ipv4_enabled && length(google_sql_database_instance.app.settings[0].ip_configuration[0].authorized_networks) == 0 && google_sql_database_instance.app.settings[0].ip_configuration[0].private_network == "projects/example-project/global/networks/distributed-cloud"
+    error_message = "Cloud SQL must have a public endpoint for the Auth Proxy, no authorized networks, and retain private VPC connectivity for runtime workloads."
   }
   assert {
     condition     = google_sql_database_instance.app.deletion_protection && google_sql_database_instance.app.settings[0].backup_configuration[0].enabled && google_sql_database_instance.app.settings[0].availability_type == "ZONAL"
@@ -48,8 +47,8 @@ run "private_database_and_shared_sql_identity" {
     error_message = "The secret must contain the Terraform-generated SQL user credentials."
   }
   assert {
-    condition     = length(google_secret_manager_secret_iam_member.access) == 2 && google_secret_manager_secret_iam_member.access["schema"].member != google_secret_manager_secret_iam_member.access["runtime"].member
-    error_message = "Both distinct Google identities need access to the shared SQL credential, not separate SQL grants."
+    condition     = length(google_secret_manager_secret_iam_member.access) == 1 && google_secret_manager_secret_iam_member.access["runtime"].member == "serviceAccount:runtime@example-project.iam.gserviceaccount.com"
+    error_message = "Only the API runtime identity should read the shared SQL credential; the release deployer reads it for one-off schema setup."
   }
 }
 
@@ -64,7 +63,6 @@ run "private_storage_and_signing" {
     labels                  = {}
     runtime_service_account = "runtime@example-project.iam.gserviceaccount.com"
     runtime_identity        = "projects/example-project/serviceAccounts/runtime@example-project.iam.gserviceaccount.com"
-    schema_service_account  = "schema@example-project.iam.gserviceaccount.com"
     build_service_account   = "builder@example-project.iam.gserviceaccount.com"
   }
   assert {
@@ -76,8 +74,8 @@ run "private_storage_and_signing" {
     error_message = "Private signed URLs require runtime self-signing with only signBlob."
   }
   assert {
-    condition     = length(google_artifact_registry_repository_iam_member.reader) == 2 && google_artifact_registry_repository_iam_member.builder.role == "roles/artifactregistry.writer"
-    error_message = "Schema/runtime must pull images while only the existing builder gets repository write access."
+    condition     = length(google_artifact_registry_repository_iam_member.reader) == 1 && google_artifact_registry_repository_iam_member.reader["runtime"].role == "roles/artifactregistry.reader" && google_artifact_registry_repository_iam_member.builder.role == "roles/artifactregistry.writer"
+    error_message = "Runtime alone needs repository read access; only the existing builder gets repository write access."
   }
 }
 

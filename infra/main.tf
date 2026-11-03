@@ -12,15 +12,9 @@ resource "google_service_account" "runtime" {
   display_name = "API runtime"
 }
 
-resource "google_service_account" "schema" {
-  account_id   = "${var.name}-ddl"
-  display_name = "Private one-off schema task"
-}
-
 resource "google_project_iam_member" "logs" {
   for_each = {
     runtime = google_service_account.runtime.email
-    schema  = google_service_account.schema.email
   }
   project = var.project_id
   role    = "roles/logging.logWriter"
@@ -42,7 +36,6 @@ module "database" {
   deletion_protection     = var.deletion_protection
   labels                  = local.labels
   runtime_service_account = google_service_account.runtime.email
-  schema_service_account  = google_service_account.schema.email
   depends_on              = [module.network]
 }
 
@@ -55,7 +48,6 @@ module "storage" {
   labels                  = local.labels
   runtime_service_account = google_service_account.runtime.email
   runtime_identity        = google_service_account.runtime.name
-  schema_service_account  = google_service_account.schema.email
   build_service_account   = var.build_service_account
 }
 
