@@ -81,6 +81,16 @@ variable "max_replicas" {
   }
 }
 
+variable "domain_name" {
+  description = "Optional HTTP hostname. Configure its DNS A record separately using deployment.lb_ip."
+  type        = string
+  default     = "sistemasdistribuidosunifan.com.br"
+  validation {
+    condition     = var.domain_name == "" || (length(var.domain_name) <= 253 && can(regex("^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$", var.domain_name)))
+    error_message = "Use a lowercase DNS hostname without a scheme, port or path, or an empty string for IP-only access."
+  }
+}
+
 variable "enable_runtime" {
   description = "False only for initial provisioning. Disabling an existing runtime destroys serving resources."
   type        = bool

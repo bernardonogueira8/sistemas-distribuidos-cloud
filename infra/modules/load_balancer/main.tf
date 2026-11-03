@@ -23,6 +23,20 @@ resource "google_compute_global_address" "api" {
 resource "google_compute_url_map" "api" {
   name            = var.name
   default_service = google_compute_backend_service.api.id
+  dynamic "host_rule" {
+    for_each = var.domain_name == "" ? [] : [var.domain_name]
+    content {
+      hosts        = [host_rule.value]
+      path_matcher = "api"
+    }
+  }
+  dynamic "path_matcher" {
+    for_each = var.domain_name == "" ? [] : [var.domain_name]
+    content {
+      name            = "api"
+      default_service = google_compute_backend_service.api.id
+    }
+  }
 }
 
 resource "google_compute_target_http_proxy" "api" {

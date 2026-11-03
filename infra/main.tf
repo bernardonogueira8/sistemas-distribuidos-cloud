@@ -78,6 +78,7 @@ module "load_balancer" {
   source         = "./modules/load_balancer"
   count          = var.enable_runtime ? 1 : 0
   name           = var.name
+  domain_name    = var.domain_name
   instance_group = module.compute[0].instance_group
   health_check   = module.compute[0].health_check
 }

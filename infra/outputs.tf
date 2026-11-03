@@ -21,6 +21,7 @@ output "deployment" {
     image                   = var.image
     enable_runtime          = var.enable_runtime
     api_url                 = try(module.load_balancer[0].api_url, null)
+    domain_url              = try(module.load_balancer[0].domain_url, null)
     lb_ip                   = try(module.load_balancer[0].ip_address, null)
     mig                     = try(module.compute[0].mig, null)
     instance_group          = try(module.compute[0].instance_group, null)

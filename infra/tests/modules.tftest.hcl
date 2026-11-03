@@ -135,4 +135,27 @@ run "http_ip_load_balancer" {
     condition     = google_compute_backend_service.api.security_policy == null
     error_message = "No WAF is required for this initial demo."
   }
+  assert {
+    condition     = length(google_compute_url_map.api.host_rule) == 0 && output.domain_url == null
+    error_message = "IP-only load balancers must not add hostname rules."
+  }
+}
+
+run "http_domain_load_balancer" {
+  command = plan
+  module { source = "./modules/load_balancer" }
+  variables {
+    name           = "distributed-cloud"
+    domain_name    = "sistemasdistribuidosunifan.com.br"
+    instance_group = "projects/example-project/regions/us-central1/instanceGroups/distributed-cloud"
+    health_check   = "projects/example-project/global/healthChecks/distributed-cloud"
+  }
+  assert {
+    condition     = one(google_compute_url_map.api.host_rule).hosts == toset(["sistemasdistribuidosunifan.com.br"]) && one(google_compute_url_map.api.host_rule).path_matcher == one(google_compute_url_map.api.path_matcher).name
+    error_message = "The requested hostname must route to the API path matcher."
+  }
+  assert {
+    condition     = output.domain_url == "http://sistemasdistribuidosunifan.com.br" && google_compute_global_forwarding_rule.http.port_range == "80"
+    error_message = "Expose the requested HTTP domain without replacing the existing IP endpoint."
+  }
 }
