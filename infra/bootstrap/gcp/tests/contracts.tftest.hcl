@@ -1,4 +1,15 @@
-mock_provider "google" {}
+mock_provider "google" {
+  mock_resource "google_service_account" {
+    defaults = {
+      name = "projects/example-project/serviceAccounts/mock-sa@example-project.iam.gserviceaccount.com"
+    }
+  }
+  mock_resource "google_iam_workload_identity_pool" {
+    defaults = {
+      name = "projects/123456789/locations/global/workloadIdentityPools/example"
+    }
+  }
+}
 variables {
   project_id           = "example-project"
   region               = "us-central1"
@@ -8,14 +19,14 @@ variables {
   state_bucket_name    = "example-project-tfstate-dev"
 }
 run "restricted_identity_and_state" {
-  command = plan
+  command = apply
   assert {
     condition     = google_storage_bucket.state.public_access_prevention == "enforced" && google_storage_bucket.state.versioning[0].enabled
     error_message = "State must be versioned and private."
   }
   assert {
-    condition     = strcontains(google_iam_workload_identity_pool_provider.github.attribute_condition, "assertion.ref == 'refs/heads/main'") && strcontains(google_iam_workload_identity_pool_provider.github.attribute_condition, "repo:example/distributed-cloud:environment:dev") && strcontains(google_iam_workload_identity_pool_provider.github.attribute_condition, "assertion.repository_id == '123456'")
-    error_message = "Federation must constrain main, exact environment subject and immutable repository ID."
+    condition     = strcontains(google_iam_workload_identity_pool_provider.github.attribute_condition, "assertion.ref == 'refs/heads/main'") && strcontains(google_iam_workload_identity_pool_provider.github.attribute_condition, "assertion.environment == 'dev'") && strcontains(google_iam_workload_identity_pool_provider.github.attribute_condition, "assertion.repository_id == '123456'") && google_service_account_iam_member.github["deployer"].member == "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository_id/123456"
+    error_message = "Federation must constrain main, exact environment claim, immutable repository ID and service-account membership."
   }
   assert {
     condition     = google_storage_bucket_iam_member.deployer_state.role == "roles/storage.objectAdmin"
