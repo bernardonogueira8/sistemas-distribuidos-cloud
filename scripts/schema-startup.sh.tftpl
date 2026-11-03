@@ -3,6 +3,7 @@ set -euo pipefail
 umask 077
 METADATA=http://metadata.google.internal/computeMetadata/v1
 WORK=/run/schema-job
+STAGE=startup
 metadata() {
   curl --fail --silent --show-error --retry 3 --connect-timeout 5 --max-time 30 \
     -H 'Metadata-Flavor: Google' "$METADATA/$1"
@@ -13,6 +14,11 @@ finish() {
   trap - EXIT
   [[ "$result" -ne 0 ]] || outcome=success
   rm -rf "$WORK"
+  if [[ "$result" -ne 0 ]]; then
+    curl --fail --silent --show-error --retry 3 --connect-timeout 5 --max-time 30 \
+      -X PUT -H 'Metadata-Flavor: Google' --data "$STAGE" \
+      "$METADATA/instance/guest-attributes/schema/failure-stage" >/dev/null 2>&1 || true
+  fi
   if ! curl --fail --silent --show-error --retry 3 --connect-timeout 5 --max-time 30 \
     -X PUT -H 'Metadata-Flavor: Google' --data "$outcome" \
     "$METADATA/instance/guest-attributes/schema/status" >/dev/null 2>&1; then
@@ -26,7 +32,9 @@ trap 'exit 143' TERM
 install -d -m 700 "$WORK"
 export DOCKER_CONFIG="$WORK/docker"
 install -d -m 700 "$DOCKER_CONFIG"
+STAGE=docker
 systemctl start docker
+STAGE=metadata
 IMAGE=$(metadata instance/attributes/schema-image)
 REGISTRY=$(metadata instance/attributes/schema-registry)
 PROJECT_ID=$(metadata instance/attributes/schema-project)
@@ -34,6 +42,7 @@ SECRET_ID=$(metadata instance/attributes/schema-secret)
 DB_HOST=$(metadata instance/attributes/schema-db-host)
 DB_NAME=$(metadata instance/attributes/schema-db-name)
 
+STAGE=image-pull
 for attempt in $(seq 1 12); do
   if metadata instance/service-accounts/default/token \
     | sed -n 's/.*"access_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -46,6 +55,7 @@ for attempt in $(seq 1 12); do
 done
 rm -f "$DOCKER_CONFIG/config.json"
 
+STAGE=secret-access
 for attempt in $(seq 1 12); do
   if docker run --rm --network host --log-driver none --entrypoint node \
     -e "PROJECT_ID=$PROJECT_ID" -e "SECRET_ID=$SECRET_ID" \
@@ -79,5 +89,6 @@ for attempt in $(seq 1 12); do
 done
 chmod 600 "$WORK/env.new"
 mv "$WORK/env.new" "$WORK/env"
+STAGE=schema-apply
 docker run --rm --network host --log-driver none --env-file "$WORK/env" \
   --entrypoint node "$IMAGE" src/db/apply-schema.js >/dev/null 2>&1

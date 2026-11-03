@@ -78,7 +78,16 @@ while (( SECONDS < DEADLINE )); do
     jq -er '[.queryValue.items[]? | select(.namespace == "schema" and .key == "status") | .value] | if length == 1 then .[0] else empty end' || true)
   case "$STATUS" in
     success) printf 'Schema applied successfully.\n'; exit 0 ;;
-    failed) printf 'Schema task failed.\n' >&2; exit 1 ;;
+    failed)
+      FAILURE_STAGE=$(gcloud compute instances get-guest-attributes "$VM" --project="$PROJECT" --zone="$ZONE" \
+        --query-path=schema/failure-stage --format=json 2>/dev/null | \
+        jq -er '[.queryValue.items[]? | select(.namespace == "schema" and .key == "failure-stage") | .value] | if length == 1 then .[0] else empty end' || true)
+      case "$FAILURE_STAGE" in
+        startup|docker|metadata|image-pull|secret-access|schema-apply) ;;
+        *) FAILURE_STAGE=unknown ;;
+      esac
+      printf 'Schema task failed during %s.\n' "$FAILURE_STAGE" >&2
+      exit 1 ;;
     '') ;;
     *) printf 'Unexpected schema task status.\n' >&2; exit 1 ;;
   esac

@@ -104,7 +104,15 @@ jobs:
       - name: Apply schema before planning the image update
         run: |
           umask 077
-          bash scripts/apply-schema-gcp.sh "$IMAGE" > "$RUNNER_TEMP/gcp-deployment/schema.log" 2>&1 || { printf 'Schema operation failed.\n' >&2; exit 1; }
+          if ! bash scripts/apply-schema-gcp.sh "$IMAGE" > "$RUNNER_TEMP/gcp-deployment/schema.log" 2>&1; then
+            failure_stage=$(sed -nE 's/^Schema task failed during (startup|docker|metadata|image-pull|secret-access|schema-apply|unknown)\.$/\1/p' "$RUNNER_TEMP/gcp-deployment/schema.log" | head -n 1)
+            if [[ -n "$failure_stage" ]]; then
+              printf 'Schema operation failed during %s.\n' "$failure_stage" >&2
+            else
+              printf 'Schema operation failed.\n' >&2
+            fi
+            exit 1
+          fi
         env:
           IMAGE: ${{ steps.image.outputs.image }}
       - name: Persist release inputs and save the deployment plan

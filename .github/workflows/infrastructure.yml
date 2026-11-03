@@ -70,12 +70,17 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          {
-          current=$(terraform -chdir=infra output -json deployment)
-          jq -e '.enable_runtime == true' <<< "$current" >/dev/null
-          image=$(jq -er '.image | select(type == "string" and test("^[a-z0-9-]+-docker\\.pkg\\.dev/[a-z0-9-]+/[a-z0-9-]+/api@sha256:[a-f0-9]{64}$"))' <<< "$current")
-          printf 'enable_runtime = true\nimage = "%s"\n' "$image" > infra/release.auto.tfvars
-          } > "$RUNNER_TEMP/gcp-deployment/inputs.log" 2>&1
+          write_runtime_inputs() {
+            local current image
+            current=$(terraform -chdir=infra output -json deployment) || return 1
+            jq -e '.enable_runtime == true' <<< "$current" >/dev/null || return 1
+            image=$(jq -er '.image | select(type == "string" and test("^[a-z0-9-]+-docker\\.pkg\\.dev/[a-z0-9-]+/[a-z0-9-]+/api@sha256:[a-f0-9]{64}$"))' <<< "$current") || return 1
+            printf 'enable_runtime = true\nimage = "%s"\n' "$image" > infra/release.auto.tfvars || return 1
+          }
+          if ! write_runtime_inputs > "$RUNNER_TEMP/gcp-deployment/inputs.log" 2>&1; then
+            printf 'Infrastructure preflight failed. The current state must have runtime enabled and a digest-pinned image; use Publish And Deploy API for the first deployment.\n' >&2
+            exit 1
+          fi
           terraform -chdir=infra plan -input=false -lock-timeout=5m -out="$RUNNER_TEMP/gcp-deployment/deployment.tfplan" > "$RUNNER_TEMP/gcp-deployment/plan.stdout.log" 2> "$RUNNER_TEMP/gcp-deployment/plan.stderr.log" || { printf 'Terraform plan failed.\n' >&2; exit 1; }
       - name: Apply the exact plan in this runner
         shell: bash

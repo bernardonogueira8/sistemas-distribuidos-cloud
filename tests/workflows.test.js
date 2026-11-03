@@ -143,6 +143,12 @@ test('schema and private initialization failures stop execution without printing
     assert.notEqual(schemaResult.status, 0);
     assert.doesNotMatch(schemaResult.stdout + schemaResult.stderr, /sensitive|UNREACHABLE/);
     assert.match(schemaResult.stderr, /Schema operation failed/);
+    const stagedSchemaFailure = runScript(`bash() { printf 'Schema task failed during schema-apply.\\nsensitive schema diagnostic\\n' >&2; return 7; }\n${schema.run}`, {
+      env: { RUNNER_TEMP: temporary, IMAGE: 'unused' },
+    });
+    assert.notEqual(stagedSchemaFailure.status, 0);
+    assert.match(stagedSchemaFailure.stderr, /Schema operation failed during schema-apply/);
+    assert.doesNotMatch(stagedSchemaFailure.stdout + stagedSchemaFailure.stderr, /sensitive|UNREACHABLE/);
     const deployment = steps.find((step) => step.id === 'deployment');
     const failedInit = runScript(`terraform() { printf 'sensitive init diagnostic\\n' >&2; return 9; }\n${deployment.run}\nprintf 'UNREACHABLE'`, {
       cwd: temporary, env: { RUNNER_TEMP: temporary, BACKEND_HCL: 'bucket = "test"', TFVARS: 'image = "stale"' },
@@ -183,6 +189,7 @@ test('infrastructure overrides stale inputs with the state digest before plannin
       });
       assert.equal(result.status === 0, success, result.stderr);
       assert.doesNotMatch(result.stdout + result.stderr, /sensitive/);
+      if (!enabled) assert.match(result.stderr, /runtime enabled and a digest-pinned image; use Publish And Deploy API/);
       assert.equal(result.stdout.includes('PLANNED'), success);
       if (enabled && stateImage === image) assert.equal(fs.readFileSync(path.join(temporary, 'infra/release.auto.tfvars'), 'utf8'), `enable_runtime = true\nimage = "${image}"\n`);
     }
