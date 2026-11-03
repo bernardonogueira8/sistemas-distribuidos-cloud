@@ -64,6 +64,11 @@ function fixture(context) {
       event.dbHost = contents.match(/^DB_HOST=(.*)$/m)?.[1];
     }
     fs.appendFileSync(process.env.TRACE, JSON.stringify(event) + '\n');
+    if (args[0] === 'run' && args.includes('--detach')) {
+      const mount = args[args.indexOf('--mount') + 1];
+      const credentialPath = mount.split(',').find(part => part.startsWith('src=')).slice(4);
+      if ((fs.statSync(credentialPath).mode & 0o777) === 0o600 && args[args.indexOf('--user') + 1] !== '0:0') process.exit(1);
+    }
     if (args[0] === 'run' && args.some(arg => arg.includes('cloud-sql-proxy')) && process.env.MOCK_PROXY_FAIL) process.exit(1);
     if (args[0] === 'run' && args.includes('--env-file') && state.schemaRuns <= Number(process.env.MOCK_SCHEMA_FAILS)) process.exit(1);
   `);
@@ -100,6 +105,9 @@ test('applies schema through private Docker network and Cloud SQL Auth Proxy wit
   assert.ok(proxy);
   assert.ok(proxy.args.includes('gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.27.0'));
   assert.ok(proxy.args.includes(deployment.db_connection_name));
+  assert.equal(proxy.args[proxy.args.indexOf('--user') + 1], '0:0');
+  assert.equal(proxy.args[proxy.args.indexOf('--cap-drop') + 1], 'ALL');
+  assert.equal(proxy.args[proxy.args.indexOf('--security-opt') + 1], 'no-new-privileges');
   assert.ok(proxy.args.some(arg => arg.includes(`src=${path.join(root, 'deployer-credentials.json')}`)));
   assert.ok(!proxy.args.some(arg => arg === '-p' || arg === '--publish'));
   assert.ok(schema.args.includes(image));
