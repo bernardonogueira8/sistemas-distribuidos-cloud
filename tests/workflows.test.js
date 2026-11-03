@@ -23,7 +23,8 @@ test('release supports the first image from provisioned base infrastructure', ()
       enable_runtime: false,
       image_repository: 'us-central1-docker.pkg.dev/demo-project/demo/api',
       registry_host: 'us-central1-docker.pkg.dev',
-      schema_service_account: 'schema@demo-project.iam.gserviceaccount.com',
+      db_connection_name: 'demo-project:us-central1:demo-mysql',
+      runtime_secret_id: 'demo-runtime',
     }) },
     encoding: 'utf8',
   });
@@ -33,7 +34,7 @@ test('release supports the first image from provisioned base infrastructure', ()
   });
   assert.notEqual(invalid.status, 0);
   const schemaIndex = steps.findIndex((step) => step.run?.includes('bash scripts/apply-schema-gcp.sh'));
-  const planIndex = steps.findIndex((step) => step.run?.includes('terraform -chdir=infra plan'));
+  const planIndex = steps.findIndex((step) => step.id !== 'base-plan' && step.run?.includes('terraform -chdir=infra plan'));
   assert.ok(schemaIndex >= 0 && planIndex > schemaIndex);
   assert.match(steps[planIndex].run, /enable_runtime = true/);
   assert.match(steps[planIndex].run, /image =/);
@@ -45,6 +46,109 @@ function runScript(script, options = {}) {
     env: { ...process.env, ...options.env },
   });
 }
+
+test('release updates infrastructure before publishing, schema and the image rollout', () => {
+  const steps = workflow('release').jobs.release.steps;
+  const ids = ['base-plan', 'base-apply', 'deployment', 'publisher', 'image'];
+  const positions = ids.map((id) => steps.findIndex((step) => step.id === id));
+  const schemaIndex = steps.findIndex((step) => step.run?.includes('bash scripts/apply-schema-gcp.sh'));
+  const rolloutIndex = steps.findIndex((step) => step.id !== 'base-plan' && step.run?.includes('terraform -chdir=infra plan'));
+  assert.ok(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])));
+  assert.ok(schemaIndex > positions.at(-1) && rolloutIndex > schemaIndex);
+  assert.doesNotMatch(steps.find((step) => step.id === 'deployment').run, /schema_service_account/);
+});
+
+test('release base plan preserves runtime, supports first deployment and fails closed before publishing', () => {
+  const steps = workflow('release').jobs.release.steps;
+  const basePlan = steps.find((step) => step.id === 'base-plan');
+  const baseApply = steps.find((step) => step.id === 'base-apply');
+  const deployment = steps.find((step) => step.id === 'deployment');
+  const image = `us-central1-docker.pkg.dev/demo-project/demo/api@sha256:${'a'.repeat(64)}`;
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-base-'));
+  try {
+    fs.mkdirSync(path.join(temporary, 'infra'));
+    fs.mkdirSync(path.join(temporary, 'gcp-deployment'));
+    const mock = String.raw`terraform() {
+      printf '%s\n' "$2" >> "$TRACE"
+      case "$2" in
+        output)
+          if [[ "$#" -eq 4 && "$4" == deployment ]]; then
+            test -f "$RUNNER_TEMP/applied" || return 90
+            printf '%s' "$UPDATED"
+          else
+            if [[ "$FAIL_STAGE" == output ]]; then return 7; fi
+            printf '%s' "$CURRENT"
+          fi
+          ;;
+        state)
+          if [[ "$FAIL_STAGE" == state ]]; then return 7; fi
+          printf '%s' "$RESOURCES"
+          ;;
+        plan)
+          test "$(cat infra/release.auto.tfvars)" = "$(printf 'enable_runtime = %s\nimage = "%s"\n' "$EXPECTED_ENABLED" "$EXPECTED_IMAGE")" || return 91
+          test "$5" = "-out=$RUNNER_TEMP/gcp-deployment/base.tfplan" || return 92
+          printf 'private base binary' > "$RUNNER_TEMP/gcp-deployment/base.tfplan"
+          printf 'sensitive plan diagnostic\n' >&2
+          if [[ "$FAIL_STAGE" == plan ]]; then return 8; fi
+          ;;
+        apply)
+          test "$#" -eq 5 || return 93
+          test "$5" = "$RUNNER_TEMP/gcp-deployment/base.tfplan" || return 94
+          test "$(cat "$5")" = 'private base binary' || return 95
+          printf 'sensitive apply diagnostic\n' >&2
+          if [[ "$FAIL_STAGE" == apply ]]; then return 9; fi
+          touch "$RUNNER_TEMP/applied"
+          ;;
+        *) return 99 ;;
+      esac
+    }
+`;
+    const active = { enable_runtime: true, image };
+    const disabled = { enable_runtime: false, image: '' };
+    const cases = [
+      { current: active, enabled: 'true', image, success: true },
+      { current: disabled, enabled: 'false', image: '', success: true },
+      { current: null, enabled: 'false', image: '', success: true },
+      { current: null, resources: 'module.database.google_sql_database.app' },
+      { current: disabled, resources: 'module.compute[0].google_compute_region_instance_group_manager.app' },
+      { current: { enable_runtime: true, image: 'invalid' } },
+      { current: {}, resources: 'module.database.google_sql_database.app' },
+      { current: active, failStage: 'output' },
+      { current: null, failStage: 'state' },
+      { current: active, enabled: 'true', image, failStage: 'plan' },
+      { current: active, enabled: 'true', image, failStage: 'apply' },
+    ];
+    for (const scenario of cases) {
+      const trace = path.join(temporary, 'trace');
+      fs.writeFileSync(trace, '');
+      fs.rmSync(path.join(temporary, 'applied'), { force: true });
+      fs.writeFileSync(path.join(temporary, 'infra/terraform.tfvars'), 'enable_runtime = true\nimage = "invalid-stale-value"\n');
+      const result = runScript(`${mock}${basePlan.run}\n${baseApply.run}\n${deployment.run}\nprintf 'READY_TO_PUBLISH'`, {
+        cwd: temporary,
+        env: {
+          RUNNER_TEMP: temporary, TRACE: trace, GITHUB_OUTPUT: path.join(temporary, 'github-output'),
+          CURRENT: JSON.stringify(scenario.current === null ? {} : { deployment: { value: scenario.current } }),
+          RESOURCES: scenario.resources || '', FAIL_STAGE: scenario.failStage || '',
+          EXPECTED_ENABLED: scenario.enabled || '', EXPECTED_IMAGE: scenario.image || '',
+          UPDATED: JSON.stringify({
+            image_repository: 'us-central1-docker.pkg.dev/demo-project/demo/api',
+            registry_host: 'us-central1-docker.pkg.dev',
+            db_connection_name: 'demo-project:us-central1:demo-mysql', runtime_secret_id: 'demo-runtime',
+          }),
+        },
+      });
+      assert.equal(result.status === 0, Boolean(scenario.success), `${JSON.stringify(scenario)}: ${result.stderr}`);
+      assert.doesNotMatch(result.stdout + result.stderr, /sensitive|private base binary/);
+      assert.equal(result.stdout.includes('READY_TO_PUBLISH'), Boolean(scenario.success));
+      const calls = fs.readFileSync(trace, 'utf8').trim().split('\n');
+      if (scenario.success) assert.deepEqual(calls, scenario.enabled === 'true' ? ['output', 'plan', 'apply', 'output'] : ['output', 'state', 'plan', 'apply', 'output']);
+      else if (scenario.failStage === 'apply') assert.deepEqual(calls, ['output', 'plan', 'apply']);
+      else assert.ok(!calls.includes('apply'));
+    }
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
 
 for (const name of ['release', 'infrastructure']) {
   test(`${name} requires main, explicit authorization and the existing prod environment before credentials`, () => {
@@ -78,8 +182,8 @@ for (const name of ['release', 'infrastructure']) {
     const steps = Object.values(config.jobs)[0].steps;
     const serialized = JSON.stringify(config);
     assert.doesNotMatch(serialized, /actions\/(?:upload|download)-artifact|plan_run_id|sha256sum|terraform[^\n]* show |PRIVATE_REPOSITORY|repository\.private/);
-    const planIndex = steps.findIndex((step) => /terraform -chdir=infra plan /.test(step.run));
-    const applyIndex = steps.findIndex((step) => /terraform -chdir=infra apply /.test(step.run));
+    const planIndex = steps.findIndex((step) => step.id !== 'base-plan' && /terraform -chdir=infra plan /.test(step.run));
+    const applyIndex = steps.findIndex((step) => step.id !== 'base-apply' && /terraform -chdir=infra apply /.test(step.run));
     assert.ok(planIndex >= 0 && applyIndex > planIndex);
     for (const step of steps.slice(planIndex, applyIndex + 1)) assert.equal(step.if, undefined);
     for (const step of steps) assert.notEqual(step['continue-on-error'], true);
@@ -155,7 +259,7 @@ test('schema and private initialization failures stop execution without printing
     assert.match(stagedProxyFailure.stderr, /Schema operation failed during proxy-start/);
     assert.doesNotMatch(stagedProxyFailure.stdout + stagedProxyFailure.stderr, /sensitive|UNREACHABLE/);
     assert.doesNotMatch(stagedSchemaFailure.stdout + stagedSchemaFailure.stderr, /sensitive|UNREACHABLE/);
-    const deployment = steps.find((step) => step.id === 'deployment');
+    const deployment = steps.find((step) => step.name === 'Initialize the application infrastructure');
     const failedInit = runScript(`terraform() { printf 'sensitive init diagnostic\\n' >&2; return 9; }\n${deployment.run}\nprintf 'UNREACHABLE'`, {
       cwd: temporary, env: { RUNNER_TEMP: temporary, BACKEND_HCL: 'bucket = "test"', TFVARS: 'image = "stale"' },
     });
@@ -207,8 +311,8 @@ test('infrastructure overrides stale inputs with the state digest before plannin
 for (const name of ['release', 'infrastructure']) {
   test(`${name} applies only its generated binary, hides failures and removes private files`, () => {
     const steps = Object.values(workflow(name).jobs)[0].steps;
-    const plan = steps.find((step) => step.run?.includes('terraform -chdir=infra plan'));
-    const apply = steps.find((step) => step.run?.includes('terraform -chdir=infra apply'));
+    const plan = steps.find((step) => step.id !== 'base-plan' && step.run?.includes('terraform -chdir=infra plan'));
+    const apply = steps.find((step) => step.id !== 'base-apply' && step.run?.includes('terraform -chdir=infra apply'));
     const cleanup = steps.at(-1);
     const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-plan-'));
     const image = `us-central1-docker.pkg.dev/demo-project/demo/api@sha256:${'b'.repeat(64)}`;

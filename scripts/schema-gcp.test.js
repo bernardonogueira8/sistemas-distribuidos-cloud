@@ -159,3 +159,20 @@ test('invalid image, outputs, credentials and retry settings fail before cloud c
     assert.equal(events().filter(event => event.tool === 'gcloud' || event.tool === 'docker').length, 0);
   }
 });
+
+test('invalid deployment outputs identify the preflight stage without exposing values', context => {
+  for (const invalidOutput of ['', '{invalid', JSON.stringify({ ...deployment, db_connection_name: null })]) {
+    const { result, events } = launch(context, { env: { DEPLOYMENT: invalidOutput } });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /^Schema operation failed during deployment-output\.$/m);
+    assert.ok(!events().some(event => event.tool === 'gcloud' || event.tool === 'docker'));
+    assert.doesNotMatch(result.stdout + result.stderr, /neverlogthis/);
+  }
+});
+
+test('image outside the deployment registry identifies image validation', context => {
+  const { result, events } = launch(context, { args: [image.replace('/api/api@', '/other/api@')] });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /^Schema operation failed during image-validation\.$/m);
+  assert.ok(!events().some(event => event.tool === 'gcloud' || event.tool === 'docker'));
+});

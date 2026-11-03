@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 umask 077
+STAGE=prerequisites
+trap 'printf "Schema operation failed during %s.\n" "$STAGE" >&2' ERR
 
 if [[ $# -ne 1 ]]; then
   printf 'Usage: bash scripts/apply-schema-gcp.sh REGISTRY/IMAGE@sha256:DIGEST\n' >&2
@@ -17,6 +19,7 @@ for tool in terraform jq gcloud docker; do
   command -v "$tool" >/dev/null || { printf 'Missing command: %s\n' "$tool" >&2; exit 2; }
 done
 
+STAGE=deployment-output
 DEPLOYMENT=$(terraform -chdir="$ROOT/infra" output -json deployment | jq -ce '
   select(type == "object") |
   select(.project_id | type == "string" and test("^[a-z][a-z0-9-]{4,61}[a-z0-9]$")) |
@@ -33,7 +36,9 @@ CONNECTION_NAME=$(jq -r '.db_connection_name' <<< "$DEPLOYMENT")
 SECRET=$(jq -r '.runtime_secret_id' <<< "$DEPLOYMENT")
 DB_NAME=$(jq -r '.db_name' <<< "$DEPLOYMENT")
 REGISTRY=$(jq -r '.registry' <<< "$DEPLOYMENT")
+STAGE=image-validation
 [[ "$IMAGE" == "$REGISTRY/"* && "${IMAGE#"$REGISTRY/"}" =~ ^[a-z0-9]+([._/-][a-z0-9]+)*@sha256:[a-f0-9]{64}$ ]] || {
+  printf 'Schema operation failed during image-validation.\n' >&2
   printf 'Image must belong to deployment.registry and use an immutable sha256 digest.\n' >&2
   exit 2
 }
@@ -49,6 +54,7 @@ fi
 
 WORK_ROOT=${RUNNER_TEMP:-${TMPDIR:-/tmp}}
 WORK="$WORK_ROOT/schema-task-$$-${RANDOM}"
+STAGE=workspace
 mkdir -m 700 -- "$WORK"
 ENV_FILE="$WORK/mysql.env"
 NETWORK="schema-net-$$-${RANDOM}"
@@ -74,6 +80,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+STAGE=secret-fetch
 if ! SECRET_PAYLOAD=$(gcloud secrets versions access latest --secret="$SECRET" --project="$PROJECT" 2>/dev/null); then
   printf 'Schema operation failed during secret-fetch.\n' >&2
   exit 1
@@ -90,6 +97,7 @@ printf 'DB_HOST=cloud-sql-proxy\nDB_PORT=3306\nDB_NAME=%s\nDB_USER=%s\nDB_PASSWO
 unset DB_PASSWORD
 chmod 600 "$ENV_FILE"
 
+STAGE=proxy-start
 if ! docker network create "$NETWORK" >/dev/null 2>&1; then
   printf 'Schema operation failed during proxy-start.\n' >&2
   exit 1
@@ -104,6 +112,7 @@ if ! docker run --detach --name "$PROXY" --network "$NETWORK" --network-alias cl
   exit 1
 fi
 
+STAGE=schema-apply
 for attempt in $(seq 1 "$ATTEMPTS"); do
   if docker run --rm --network "$NETWORK" --log-driver none --env-file "$ENV_FILE" \
     --entrypoint node "$IMAGE" src/db/apply-schema.js >/dev/null 2>&1; then
