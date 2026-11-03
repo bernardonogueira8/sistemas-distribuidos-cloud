@@ -19,7 +19,12 @@ variables {
   state_bucket_name    = "example-project-tfstate-dev"
 }
 run "restricted_identity_and_state" {
-  command = apply
+  command = plan
+  override_resource {
+    override_during = plan
+    target          = google_iam_workload_identity_pool.github
+    values          = { name = "projects/123456789/locations/global/workloadIdentityPools/example" }
+  }
   assert {
     condition     = google_storage_bucket.state.public_access_prevention == "enforced" && google_storage_bucket.state.versioning[0].enabled
     error_message = "State must be versioned and private."
