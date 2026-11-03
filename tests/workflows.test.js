@@ -258,6 +258,14 @@ test('schema and private initialization failures stop execution without printing
     assert.notEqual(stagedProxyFailure.status, 0);
     assert.match(stagedProxyFailure.stderr, /Schema operation failed during proxy-start/);
     assert.doesNotMatch(stagedProxyFailure.stdout + stagedProxyFailure.stderr, /sensitive|UNREACHABLE/);
+    for (const reason of ['proxy-authentication', 'database-permission', 'sensitive-token']) {
+      const classified = runScript(`bash() { printf 'Schema failure reason: ${reason}.\nSchema operation failed during schema-apply.\nsensitive diagnostic\n' >&2; return 7; }\n${schema.run}`, {
+        env: { RUNNER_TEMP: temporary, IMAGE: 'unused' },
+      });
+      assert.notEqual(classified.status, 0);
+      assert.doesNotMatch(classified.stdout + classified.stderr, /sensitive/);
+      if (reason !== 'sensitive-token') assert.ok(classified.stderr.includes(`Schema failure reason: ${reason}.`));
+    }
     assert.doesNotMatch(stagedSchemaFailure.stdout + stagedSchemaFailure.stderr, /sensitive|UNREACHABLE/);
     const deployment = steps.find((step) => step.name === 'Initialize the application infrastructure');
     const failedInit = runScript(`terraform() { printf 'sensitive init diagnostic\\n' >&2; return 9; }\n${deployment.run}\nprintf 'UNREACHABLE'`, {

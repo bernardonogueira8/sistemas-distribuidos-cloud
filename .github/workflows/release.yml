@@ -150,6 +150,8 @@ jobs:
         run: |
           umask 077
           if ! bash scripts/apply-schema-gcp.sh "$IMAGE" > "$RUNNER_TEMP/gcp-deployment/schema.log" 2>&1; then
+            failure_reason=$(sed -nE 's/^Schema failure reason: (proxy-credentials|proxy-authentication|cloud-sql-permission|cloud-sql-connectivity|image-pull|database-authentication|database-permission|schema-syntax|connection-refused|connection-reset|connection-timeout|proxy-dns|unclassified)\.$/\1/p' "$RUNNER_TEMP/gcp-deployment/schema.log" | head -n 1)
+            if [[ -n "$failure_reason" ]]; then printf 'Schema failure reason: %s.\n' "$failure_reason" >&2; fi
             failure_stage=$(sed -nE 's/^Schema operation failed during (prerequisites|deployment-output|image-validation|workspace|credentials|secret-fetch|proxy-start|schema-apply|cleanup)\.$/\1/p' "$RUNNER_TEMP/gcp-deployment/schema.log" | head -n 1)
             if [[ -n "$failure_stage" ]]; then
               printf 'Schema operation failed during %s.\n' "$failure_stage" >&2

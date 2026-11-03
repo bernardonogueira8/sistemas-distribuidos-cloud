@@ -2,9 +2,20 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { applySchema } = require('../src/db/apply-schema');
+const { applySchema, schemaFailureReason } = require('../src/db/apply-schema');
 
 const environment = { DB_HOST: 'mysql', DB_USER: 'schema', DB_PASSWORD: 'disposable' };
+
+test('schema failure reasons expose only allowlisted categories, never error messages', () => {
+  assert.equal(schemaFailureReason({ code: 'ER_ACCESS_DENIED_ERROR', message: 'secret' }), 'database-authentication');
+  assert.equal(schemaFailureReason({ code: 'ER_DBACCESS_DENIED_ERROR' }), 'database-permission');
+  assert.equal(schemaFailureReason({ code: 'ECONNREFUSED' }), 'connection-refused');
+  assert.equal(schemaFailureReason({ code: 'ETIMEDOUT' }), 'connection-timeout');
+  assert.equal(schemaFailureReason({ code: 'ENOTFOUND' }), 'proxy-dns');
+  assert.equal(schemaFailureReason({ code: 'secret', message: 'secret' }), 'unclassified');
+  assert.equal(schemaFailureReason({ code: '__proto__' }), 'unclassified');
+  assert.equal(schemaFailureReason(null), 'unclassified');
+});
 
 test('applySchema validates required environment before connecting', async () => {
   for (const name of Object.keys(environment)) {

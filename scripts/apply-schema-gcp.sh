@@ -116,11 +116,28 @@ fi
 STAGE=schema-apply
 for attempt in $(seq 1 "$ATTEMPTS"); do
   if docker run --rm --network "$NETWORK" --log-driver none --env-file "$ENV_FILE" \
-    --entrypoint node "$IMAGE" src/db/apply-schema.js >/dev/null 2>&1; then
+    --entrypoint node "$IMAGE" src/db/apply-schema.js > "$WORK/schema.log" 2>&1; then
     printf 'Schema applied successfully.\n'
     exit 0
   fi
   if (( attempt < ATTEMPTS )); then sleep 2; fi
 done
+docker logs "$PROXY" > "$WORK/proxy.log" 2>&1 || true
+REASON=unclassified
+if grep -Eqi 'permission denied.*credentials|credentials.*permission denied' "$WORK/proxy.log"; then
+  REASON=proxy-credentials
+elif grep -Eqi 'invalid_grant|unauthorized_client|failed to (retrieve|refresh).*token|failed to get.*credentials' "$WORK/proxy.log"; then
+  REASON=proxy-authentication
+elif grep -Eqi '403|not authorized|permission.*denied|accessNotConfigured|SERVICE_DISABLED' "$WORK/proxy.log"; then
+  REASON=cloud-sql-permission
+elif grep -Eqi 'dial tcp.*(timeout|refused)|no IP address|network is unreachable' "$WORK/proxy.log"; then
+  REASON=cloud-sql-connectivity
+elif grep -Eqi 'manifest unknown|pull access denied|unauthorized|failed to resolve reference' "$WORK/schema.log"; then
+  REASON=image-pull
+else
+  REASON=$(sed -nE 's/^Schema failure reason: (database-authentication|database-permission|schema-syntax|connection-refused|connection-reset|connection-timeout|proxy-dns|unclassified)\.$/\1/p' "$WORK/schema.log" | head -n 1)
+  REASON=${REASON:-unclassified}
+fi
+printf 'Schema failure reason: %s.\n' "$REASON" >&2
 printf 'Schema operation failed during schema-apply.\n' >&2
 exit 1

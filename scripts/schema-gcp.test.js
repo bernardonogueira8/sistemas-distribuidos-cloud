@@ -32,7 +32,7 @@ function fixture(context) {
     TRACE: trace, STATE: state, DEPLOYMENT: JSON.stringify(deployment),
     GOOGLE_APPLICATION_CREDENTIALS: credentials, RUNNER_TEMP: path.join(root, 'runner-temp'),
     SCHEMA_CONNECT_ATTEMPTS: '3', MOCK_SECRET: secretPayload,
-    MOCK_SECRET_FAIL: '', MOCK_PROXY_FAIL: '', MOCK_SCHEMA_FAILS: '0'
+    MOCK_SECRET_FAIL: '', MOCK_PROXY_FAIL: '', MOCK_SCHEMA_FAILS: '0', MOCK_PROXY_LOG: '', MOCK_SCHEMA_LOG: ''
   };
   const executable = (name, body) => writeFileSync(path.join(root, 'bin', name),
     `#!${process.execPath}\n${body}\n`, { mode: 0o700 });
@@ -64,13 +64,17 @@ function fixture(context) {
       event.dbHost = contents.match(/^DB_HOST=(.*)$/m)?.[1];
     }
     fs.appendFileSync(process.env.TRACE, JSON.stringify(event) + '\n');
+    if (args[0] === 'logs') process.stdout.write(process.env.MOCK_PROXY_LOG);
     if (args[0] === 'run' && args.includes('--detach')) {
       const mount = args[args.indexOf('--mount') + 1];
       const credentialPath = mount.split(',').find(part => part.startsWith('src=')).slice(4);
       if ((fs.statSync(credentialPath).mode & 0o777) === 0o600 && args[args.indexOf('--user') + 1] !== '0:0') process.exit(1);
     }
     if (args[0] === 'run' && args.some(arg => arg.includes('cloud-sql-proxy')) && process.env.MOCK_PROXY_FAIL) process.exit(1);
-    if (args[0] === 'run' && args.includes('--env-file') && state.schemaRuns <= Number(process.env.MOCK_SCHEMA_FAILS)) process.exit(1);
+    if (args[0] === 'run' && args.includes('--env-file') && state.schemaRuns <= Number(process.env.MOCK_SCHEMA_FAILS)) {
+      process.stderr.write(process.env.MOCK_SCHEMA_LOG);
+      process.exit(1);
+    }
   `);
   executable('sleep', 'process.exit(0);');
   return { root, env, events, state };
@@ -165,6 +169,29 @@ test('invalid image, outputs, credentials and retry settings fail before cloud c
     const { result, events } = launch(context, options);
     assert.notEqual(result.status, 0);
     assert.equal(events().filter(event => event.tool === 'gcloud' || event.tool === 'docker').length, 0);
+  }
+});
+
+test('schema diagnostics classify private proxy and database logs without exposing payloads', context => {
+  const cases = [
+    { proxy: 'open /credentials.json: permission denied neverlogthis', reason: 'proxy-credentials' },
+    { proxy: 'invalid_grant Bearer neverlogthis', reason: 'proxy-authentication' },
+    { proxy: 'googleapi: Error 403: not authorized neverlogthis', reason: 'cloud-sql-permission' },
+    { proxy: 'dial tcp 10.0.0.1:3307: i/o timeout neverlogthis', reason: 'cloud-sql-connectivity' },
+    { schema: 'unauthorized: neverlogthis', reason: 'image-pull' },
+    { schema: 'Schema failure reason: database-authentication.\nneverlogthis', reason: 'database-authentication' },
+    { schema: 'Schema failure reason: database-permission.\nneverlogthis', reason: 'database-permission' },
+    { schema: 'Schema failure reason: neverlogthis.\n', reason: 'unclassified' },
+  ];
+  for (const scenario of cases) {
+    const { result, root } = launch(context, { env: {
+      SCHEMA_CONNECT_ATTEMPTS: '1', MOCK_SCHEMA_FAILS: '1',
+      MOCK_PROXY_LOG: scenario.proxy || '', MOCK_SCHEMA_LOG: scenario.schema || '',
+    } });
+    assert.notEqual(result.status, 0);
+    assert.ok(result.stderr.includes(`Schema failure reason: ${scenario.reason}.`), result.stderr);
+    assert.doesNotMatch(result.stdout + result.stderr, /neverlogthis|Bearer/);
+    assert.deepEqual(readdirSync(path.join(root, 'runner-temp')), []);
   }
 });
 
