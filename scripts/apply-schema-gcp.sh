@@ -72,16 +72,15 @@ gcloud compute instances create "$VM" --project="$PROJECT" --zone="$ZONE" --quie
   --metadata-from-file="startup-script=$ROOT/scripts/schema-startup.sh.tftpl" >/dev/null
 
 DEADLINE=$((SECONDS + TIMEOUT))
+GUEST_ATTRIBUTES='{}'
 while (( SECONDS < DEADLINE )); do
-  STATUS=$(gcloud compute instances get-guest-attributes "$VM" --project="$PROJECT" --zone="$ZONE" \
-    --query-path=schema/status --format=json 2>/dev/null | \
-    jq -er '[.queryValue.items[]? | select(.namespace == "schema" and .key == "status") | .value] | if length == 1 then .[0] else empty end' || true)
+  GUEST_ATTRIBUTES=$(gcloud compute instances get-guest-attributes "$VM" --project="$PROJECT" --zone="$ZONE" \
+    --query-path=schema --format=json 2>/dev/null || true)
+  STATUS=$(jq -er '[.queryValue.items[]? | select(.key == "status") | .value] | if length == 1 then .[0] else empty end' <<< "$GUEST_ATTRIBUTES" 2>/dev/null || true)
   case "$STATUS" in
     success) printf 'Schema applied successfully.\n'; exit 0 ;;
     failed)
-      FAILURE_STAGE=$(gcloud compute instances get-guest-attributes "$VM" --project="$PROJECT" --zone="$ZONE" \
-        --query-path=schema/failure-stage --format=json 2>/dev/null | \
-        jq -er '[.queryValue.items[]? | select(.namespace == "schema" and .key == "failure-stage") | .value] | if length == 1 then .[0] else empty end' || true)
+      FAILURE_STAGE=$(jq -er '[.queryValue.items[]? | select(.key == "failure-stage") | .value] | if length == 1 then .[0] else empty end' <<< "$GUEST_ATTRIBUTES" 2>/dev/null || true)
       case "$FAILURE_STAGE" in
         startup|docker|metadata|image-pull|secret-access|schema-apply) ;;
         *) FAILURE_STAGE=unknown ;;
@@ -97,9 +96,7 @@ while (( SECONDS < DEADLINE )); do
   (( INTERVAL <= REMAINING )) || INTERVAL=$REMAINING
   sleep "$INTERVAL"
 done
-LAST_STAGE=$(gcloud compute instances get-guest-attributes "$VM" --project="$PROJECT" --zone="$ZONE" \
-  --query-path=schema/stage --format=json 2>/dev/null | \
-  jq -er '[.queryValue.items[]? | select(.namespace == "schema" and .key == "stage") | .value] | if length == 1 then .[0] else empty end' || true)
+LAST_STAGE=$(jq -er '[.queryValue.items[]? | select(.key == "stage") | .value] | if length == 1 then .[0] else empty end' <<< "$GUEST_ATTRIBUTES" 2>/dev/null || true)
 case "$LAST_STAGE" in
   startup|docker|metadata|image-pull|secret-access|schema-apply) ;;
   *) LAST_STAGE=unknown ;;

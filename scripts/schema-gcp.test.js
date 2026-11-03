@@ -54,11 +54,10 @@ function launch(context, options = {}) {
     if (args.includes('delete')) process.exit(process.env.MOCK_DELETE_FAIL ? 1 : 0);
     if (process.env.MOCK_MODE === 'unavailable') process.exit(1);
     if (process.env.MOCK_MODE === 'malformed') { console.log('not json'); process.exit(0); }
-    const failureStage = args.includes('--query-path=schema/failure-stage');
-    const stage = args.includes('--query-path=schema/stage');
-    console.log(JSON.stringify({queryValue: {items: process.env.MOCK_MODE === 'pending' && !stage ? [] :
-      [{namespace: 'schema', key: failureStage ? 'failure-stage' : stage ? 'stage' : 'status',
-        value: failureStage ? process.env.MOCK_FAILURE_STAGE : stage ? process.env.MOCK_TIMEOUT_STAGE : process.env.MOCK_MODE}]}}));
+    const items = [{namespace: 'schema', key: 'stage', value: process.env.MOCK_TIMEOUT_STAGE}];
+    if (process.env.MOCK_MODE !== 'pending') items.push({namespace: 'schema', key: 'status', value: process.env.MOCK_MODE});
+    if (process.env.MOCK_MODE === 'failed') items.push({namespace: 'schema', key: 'failure-stage', value: process.env.MOCK_FAILURE_STAGE});
+    console.log(JSON.stringify({queryPath: 'schema', queryValue: {items}}));
   `);
   Object.assign(setup.env, options.env);
   const result = spawnSync('/bin/bash', [path.join(setup.root, 'scripts/apply-schema-gcp.sh'),
@@ -79,6 +78,9 @@ test('success creates private COS with schema identity and deletes it without SS
   assert.equal(result.status, 0, result.stderr);
   const calls = events();
   assert.deepEqual(calls[0], [`-chdir=${root}/infra`, 'output', '-json', 'deployment']);
+  const guestAttributeReads = calls.filter(args => args.includes('get-guest-attributes'));
+  assert.ok(guestAttributeReads.length > 0);
+  assert.ok(guestAttributeReads.every(args => args.includes('--query-path=schema')));
   const create = calls.find(args => args.includes('create'));
   for (const expected of ['--no-address', '--image-family=cos-stable', '--image-project=cos-cloud',
     `--subnet=${deployment.subnetwork}`, `--service-account=${deployment.schema_service_account}`,
