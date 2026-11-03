@@ -31,7 +31,7 @@ function fixture(context) {
     ...process.env, PATH: `${root}/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin`,
     TRACE: trace, DEPLOYMENT: JSON.stringify(deployment),
     SCHEMA_TIMEOUT_SECONDS: '1', SCHEMA_POLL_SECONDS: '1',
-    MOCK_MODE: 'success', MOCK_DELETE_FAIL: '', MOCK_CREATE_FAIL: '', MOCK_FAILURE_STAGE: 'schema-apply'
+    MOCK_MODE: 'success', MOCK_DELETE_FAIL: '', MOCK_CREATE_FAIL: '', MOCK_FAILURE_STAGE: 'schema-apply', MOCK_TIMEOUT_STAGE: 'image-pull'
   };
   const executable = (name, body) => writeFileSync(path.join(root, 'bin', name),
     `#!${process.execPath}\n${body}\n`, { mode: 0o700 });
@@ -55,9 +55,10 @@ function launch(context, options = {}) {
     if (process.env.MOCK_MODE === 'unavailable') process.exit(1);
     if (process.env.MOCK_MODE === 'malformed') { console.log('not json'); process.exit(0); }
     const failureStage = args.includes('--query-path=schema/failure-stage');
-    console.log(JSON.stringify({queryValue: {items: process.env.MOCK_MODE === 'pending' ? [] :
-      [{namespace: 'schema', key: failureStage ? 'failure-stage' : 'status',
-        value: failureStage ? process.env.MOCK_FAILURE_STAGE : process.env.MOCK_MODE}]}}));
+    const stage = args.includes('--query-path=schema/stage');
+    console.log(JSON.stringify({queryValue: {items: process.env.MOCK_MODE === 'pending' && !stage ? [] :
+      [{namespace: 'schema', key: failureStage ? 'failure-stage' : stage ? 'stage' : 'status',
+        value: failureStage ? process.env.MOCK_FAILURE_STAGE : stage ? process.env.MOCK_TIMEOUT_STAGE : process.env.MOCK_MODE}]}}));
   `);
   Object.assign(setup.env, options.env);
   const result = spawnSync('/bin/bash', [path.join(setup.root, 'scripts/apply-schema-gcp.sh'),
@@ -99,7 +100,7 @@ for (const mode of ['failed', 'pending', 'unavailable', 'malformed', 'unexpected
     assert.notEqual(result.status, 0);
     assert.equal(events().filter(args => args.includes('delete')).length, 1);
     if (mode === 'failed') assert.match(result.stderr, /Schema task failed during schema-apply/);
-    if (['pending', 'unavailable', 'malformed'].includes(mode)) assert.match(result.stderr, /Timed out/);
+    if (['pending', 'unavailable', 'malformed'].includes(mode)) assert.match(result.stderr, /Timed out waiting for schema task during (image-pull|unknown)/);
   });
 }
 
@@ -154,7 +155,8 @@ function boot(context, mode) {
     const args = process.argv.slice(2);
     const url = args[args.length - 1];
     if (url.includes('guest-attributes')) {
-      fs.appendFileSync(process.env.TRACE, JSON.stringify({status: args[args.indexOf('--data') + 1]}) + '\\n');
+      const key = url.split('/').pop();
+      fs.appendFileSync(process.env.TRACE, JSON.stringify({[key]: args[args.indexOf('--data') + 1]}) + '\\n');
     } else if (url.endsWith('/token')) console.log('');
     else console.log('nonsecret-reference');
   `);
@@ -189,7 +191,7 @@ for (const mode of ['success', 'failed', 'pull-failed', 'credentials-failed']) {
     assert.equal(result.status === 0, mode === 'success', result.stderr);
     assert.equal(events().at(-1).status, mode === 'success' ? 'success' : 'failed');
     const failureStage = { failed: 'schema-apply', 'pull-failed': 'image-pull', 'credentials-failed': 'secret-access' }[mode];
-    if (failureStage) assert.ok(events().some(event => event.status === failureStage));
+    if (failureStage) assert.ok(events().some(event => event.stage === failureStage));
     assert.equal(existsSync(work), false);
     assert.doesNotMatch(result.stdout + result.stderr, /never-log-this/);
     const container = events().find(event => event.args);

@@ -143,6 +143,12 @@ test('schema and private initialization failures stop execution without printing
     assert.notEqual(schemaResult.status, 0);
     assert.doesNotMatch(schemaResult.stdout + schemaResult.stderr, /sensitive|UNREACHABLE/);
     assert.match(schemaResult.stderr, /Schema operation failed/);
+    const timedOutSchema = runScript(`bash() { printf 'Timed out waiting for schema task during image-pull.\\n' >&2; return 1; }\n${schema.run}`, {
+      env: { RUNNER_TEMP: temporary, IMAGE: 'unused' },
+    });
+    assert.notEqual(timedOutSchema.status, 0);
+    assert.match(timedOutSchema.stderr, /Schema task timed out during image-pull/);
+    assert.doesNotMatch(timedOutSchema.stdout + timedOutSchema.stderr, /sensitive|UNREACHABLE/);
     const stagedSchemaFailure = runScript(`bash() { printf 'Schema task failed during schema-apply.\\nsensitive schema diagnostic\\n' >&2; return 7; }\n${schema.run}`, {
       env: { RUNNER_TEMP: temporary, IMAGE: 'unused' },
     });

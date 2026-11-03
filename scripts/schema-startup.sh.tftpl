@@ -4,6 +4,11 @@ umask 077
 METADATA=http://metadata.google.internal/computeMetadata/v1
 WORK=/run/schema-job
 STAGE=startup
+report_stage() {
+  curl --fail --silent --show-error --retry 3 --connect-timeout 5 --max-time 30 \
+    -X PUT -H 'Metadata-Flavor: Google' --data "$STAGE" \
+    "$METADATA/instance/guest-attributes/schema/stage" >/dev/null 2>&1 || true
+}
 metadata() {
   curl --fail --silent --show-error --retry 3 --connect-timeout 5 --max-time 30 \
     -H 'Metadata-Flavor: Google' "$METADATA/$1"
@@ -29,12 +34,15 @@ finish() {
 trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+report_stage
 install -d -m 700 "$WORK"
 export DOCKER_CONFIG="$WORK/docker"
 install -d -m 700 "$DOCKER_CONFIG"
 STAGE=docker
+report_stage
 systemctl start docker
 STAGE=metadata
+report_stage
 IMAGE=$(metadata instance/attributes/schema-image)
 REGISTRY=$(metadata instance/attributes/schema-registry)
 PROJECT_ID=$(metadata instance/attributes/schema-project)
@@ -43,6 +51,7 @@ DB_HOST=$(metadata instance/attributes/schema-db-host)
 DB_NAME=$(metadata instance/attributes/schema-db-name)
 
 STAGE=image-pull
+report_stage
 for attempt in $(seq 1 12); do
   if metadata instance/service-accounts/default/token \
     | sed -n 's/.*"access_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -56,6 +65,7 @@ done
 rm -f "$DOCKER_CONFIG/config.json"
 
 STAGE=secret-access
+report_stage
 for attempt in $(seq 1 12); do
   if docker run --rm --network host --log-driver none --entrypoint node \
     -e "PROJECT_ID=$PROJECT_ID" -e "SECRET_ID=$SECRET_ID" \
@@ -90,5 +100,6 @@ done
 chmod 600 "$WORK/env.new"
 mv "$WORK/env.new" "$WORK/env"
 STAGE=schema-apply
+report_stage
 docker run --rm --network host --log-driver none --env-file "$WORK/env" \
   --entrypoint node "$IMAGE" src/db/apply-schema.js >/dev/null 2>&1

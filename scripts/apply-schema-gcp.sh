@@ -97,5 +97,12 @@ while (( SECONDS < DEADLINE )); do
   (( INTERVAL <= REMAINING )) || INTERVAL=$REMAINING
   sleep "$INTERVAL"
 done
-printf 'Timed out waiting for schema task.\n' >&2
+LAST_STAGE=$(gcloud compute instances get-guest-attributes "$VM" --project="$PROJECT" --zone="$ZONE" \
+  --query-path=schema/stage --format=json 2>/dev/null | \
+  jq -er '[.queryValue.items[]? | select(.namespace == "schema" and .key == "stage") | .value] | if length == 1 then .[0] else empty end' || true)
+case "$LAST_STAGE" in
+  startup|docker|metadata|image-pull|secret-access|schema-apply) ;;
+  *) LAST_STAGE=unknown ;;
+esac
+printf 'Timed out waiting for schema task during %s.\n' "$LAST_STAGE" >&2
 exit 1
