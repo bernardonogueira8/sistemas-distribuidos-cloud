@@ -92,8 +92,17 @@ jobs:
               image=$(jq -er '.image | select(type == "string" and test("^[a-z0-9-]+-docker\\.pkg\\.dev/[a-z0-9-]+/[a-z0-9_-]+/api@sha256:[a-f0-9]{64}$"))' <<< "$current") || return 1
             else
               resources=$(terraform -chdir=infra state list) || return 1
-              if [[ "$resources" == *'module.compute['* || "$resources" == *'module.load_balancer['* ]]; then return 1; fi
-              image=""
+              if [[ "$resources" == *'module.compute['* || "$resources" == *'module.load_balancer['* ]]; then
+                image=$(terraform -chdir=infra state pull | jq -er '
+                  [.resources[] | select(.module == "module.compute[0]" and .type == "google_compute_instance_template") |
+                    .instances[].attributes.metadata["startup-script"] |
+                    capture("(?:^|\\n)IMAGE=\u0027(?<image>[a-z0-9-]+-docker\\.pkg\\.dev/[a-z0-9-]+/[a-z0-9_-]+/api@sha256:[a-f0-9]{64})\u0027(?:\\n|$)").image] |
+                  unique | select(length == 1) | .[0]
+                ') || return 1
+                enabled=true
+              else
+                image=""
+              fi
             fi
             printf 'enable_runtime = %s\nimage = "%s"\n' "$enabled" "$image" > infra/release.auto.tfvars || return 1
           }

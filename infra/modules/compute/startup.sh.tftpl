@@ -54,6 +54,11 @@ printf '%s\n' 'CLOUD_PROVIDER=gcp' 'STORAGE_PROVIDER=gcp' 'STORAGE_BUCKET=${buck
 chmod 600 /run/cloud-api/env.new
 mv /run/cloud-api/env.new /run/cloud-api/env
 docker rm -f cloud-api >/dev/null 2>&1 || true
+for source_range in 35.191.0.0/16 130.211.0.0/22; do
+  if ! iptables -w -C INPUT -p tcp -s "$source_range" --dport 3000 -j ACCEPT 2>/dev/null; then
+    iptables -w -I INPUT 1 -p tcp -s "$source_range" --dport 3000 -j ACCEPT
+  fi
+done
 docker run -d --name cloud-api --network host --restart always \
   --log-driver gcplogs --log-opt gcp-project='${project_id}' \
   --env-file /run/cloud-api/env --entrypoint node "$IMAGE" src/server.js >/dev/null

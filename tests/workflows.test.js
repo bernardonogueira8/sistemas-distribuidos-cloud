@@ -82,7 +82,7 @@ test('release base plan preserves runtime, supports first deployment and fails c
           ;;
         state)
           if [[ "$FAIL_STAGE" == state ]]; then return 7; fi
-          printf '%s' "$RESOURCES"
+          if [[ "$3" == pull ]]; then printf '%s' "$PARTIAL_STATE"; else printf '%s' "$RESOURCES"; fi
           ;;
         plan)
           test "$(cat infra/release.auto.tfvars)" = "$(printf 'enable_runtime = %s\nimage = "%s"\n' "$EXPECTED_ENABLED" "$EXPECTED_IMAGE")" || return 91
@@ -111,6 +111,8 @@ test('release base plan preserves runtime, supports first deployment and fails c
       { current: null, enabled: 'false', image: '', success: true },
       { current: null, resources: 'module.database.google_sql_database.app' },
       { current: disabled, resources: 'module.compute[0].google_compute_region_instance_group_manager.app' },
+      { current: disabled, resources: 'module.compute[0].google_compute_region_instance_group_manager.app', partialImage: image, enabled: 'true', image, success: true },
+      { current: disabled, resources: 'module.compute[0].google_compute_region_instance_group_manager.app', partialImage: 'invalid' },
       { current: { enable_runtime: true, image: 'invalid' } },
       { current: {}, resources: 'module.database.google_sql_database.app' },
       { current: active, failStage: 'output' },
@@ -129,6 +131,10 @@ test('release base plan preserves runtime, supports first deployment and fails c
           RUNNER_TEMP: temporary, TRACE: trace, GITHUB_OUTPUT: path.join(temporary, 'github-output'),
           CURRENT: JSON.stringify(scenario.current === null ? {} : { deployment: { value: scenario.current } }),
           RESOURCES: scenario.resources || '', FAIL_STAGE: scenario.failStage || '',
+          PARTIAL_STATE: JSON.stringify({ resources: scenario.partialImage ? [{
+            module: 'module.compute[0]', type: 'google_compute_instance_template',
+            instances: [{ attributes: { metadata: { 'startup-script': `#!/bin/bash\nIMAGE='${scenario.partialImage}'\n` } } }],
+          }] : [] }),
           EXPECTED_ENABLED: scenario.enabled || '', EXPECTED_IMAGE: scenario.image || '',
           UPDATED: JSON.stringify({
             image_repository: 'us-central1-docker.pkg.dev/demo-project/demo/api',
@@ -141,7 +147,7 @@ test('release base plan preserves runtime, supports first deployment and fails c
       assert.doesNotMatch(result.stdout + result.stderr, /sensitive|private base binary/);
       assert.equal(result.stdout.includes('READY_TO_PUBLISH'), Boolean(scenario.success));
       const calls = fs.readFileSync(trace, 'utf8').trim().split('\n');
-      if (scenario.success) assert.deepEqual(calls, scenario.enabled === 'true' ? ['output', 'plan', 'apply', 'output'] : ['output', 'state', 'plan', 'apply', 'output']);
+      if (scenario.success) assert.deepEqual(calls, scenario.partialImage ? ['output', 'state', 'state', 'plan', 'apply', 'output'] : scenario.enabled === 'true' ? ['output', 'plan', 'apply', 'output'] : ['output', 'state', 'plan', 'apply', 'output']);
       else if (scenario.failStage === 'apply') assert.deepEqual(calls, ['output', 'plan', 'apply']);
       else assert.ok(!calls.includes('apply'));
     }

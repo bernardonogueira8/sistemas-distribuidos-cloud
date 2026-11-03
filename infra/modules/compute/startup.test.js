@@ -49,6 +49,27 @@ test('credential bootstrap validates JSON and uses short-lived metadata ADC', as
   assert.equal(result.requests[1].options.headers.Authorization, 'Bearer test-token');
 });
 
+test('host firewall admits only GFE health traffic and is idempotent on startup', () => {
+  const firewall = template.slice(template.indexOf('for source_range in '), template.indexOf('docker run -d --name cloud-api'));
+  assert.match(firewall, /35\.191\.0\.0\/16 130\.211\.0\.0\/22/);
+  assert.doesNotMatch(firewall, /0\.0\.0\.0\/0|--dport (?!3000)/);
+  const mock = String.raw`
+    inserted=""
+    iptables() {
+      if [[ "$2" == -C ]]; then
+        [[ "$inserted" == *"$7"* ]]
+      elif [[ "$2" == -I ]]; then
+        [[ "$*" == "-w -I INPUT 1 -p tcp -s $8 --dport 3000 -j ACCEPT" ]] || return 9
+        inserted="$inserted $8"
+        printf 'INSERT %s\n' "$8"
+      else return 8; fi
+    }
+  `;
+  const result = spawnSync('/bin/bash', ['-eu', '-c', `${mock}${firewall}\n${firewall}`], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'INSERT 35.191.0.0/16\nINSERT 130.211.0.0/22\n');
+});
+
 test('invalid credentials cannot inject Docker environment entries or leak in logs', async () => {
   for (const payload of [{ DB_USER: 'api', DB_PASSWORD: 'secret\nADMIN=true' }, { DB_USER: '', DB_PASSWORD: 'secret' }, { DB_USER: 'api', DB_PASSWORD: 123 }, { DB_USER: 'api', DB_PASSWORD: 'secret\u0000' }]) {
     const result = await credentials(payload);
