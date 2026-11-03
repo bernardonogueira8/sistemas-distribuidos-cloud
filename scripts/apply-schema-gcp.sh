@@ -104,7 +104,7 @@ if ! docker network create "$NETWORK" >/dev/null 2>&1; then
 fi
 NETWORK_CREATED=1
 PROXY_CREATED=1
-if ! docker run --detach --user 0:0 --cap-drop ALL --security-opt no-new-privileges \
+if ! docker run --detach --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
   --name "$PROXY" --network "$NETWORK" --network-alias cloud-sql-proxy \
   --mount "type=bind,src=$CREDENTIALS,dst=/credentials.json,readonly" \
   "$PROXY_IMAGE" --address 0.0.0.0 --port 3306 --credentials-file /credentials.json "$CONNECTION_NAME" \
