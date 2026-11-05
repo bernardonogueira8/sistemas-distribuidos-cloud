@@ -60,7 +60,28 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          {
+          report_bootstrap_failure() {
+            local stage="$1" log="$2" diagnostic location
+            diagnostic=$(awk '
+              /^Error: / {
+                sub(/^Error: /, "")
+                gsub(/"[^"]*"/, "\"[redacted]\"")
+                gsub(/[[:alnum:]_.+-]+@[[:alnum:].-]+/, "[redacted identity]")
+                gsub(/sha256:[[:xdigit:]]+/, "sha256:[redacted]")
+                gsub(/https?:\/\/[^ ]+/, "[redacted URL]")
+                print substr($0, 1, 240)
+                exit
+              }
+            ' "$log")
+            location=$(awk '/^  on / { sub(/^  /, ""); print; exit }' "$log")
+            printf 'Bootstrap %s failed. Application infrastructure was not planned.\n' "$stage" >&2
+            if [[ -n "$diagnostic" ]]; then printf 'Terraform diagnostic: %s\n' "$diagnostic" >&2; fi
+            if [[ -n "$location" ]]; then printf 'Terraform location: %s\n' "$location" >&2; fi
+            if grep -Eiq '403|permission denied|not authorized|unauthorized' "$log"; then
+              printf 'Bootstrap error category: GCP API authorization or permission failure.\n' >&2
+            fi
+          }
+          if ! {
             test -n "$BOOTSTRAP_BACKEND_HCL"
             test -n "$BOOTSTRAP_TFVARS"
             printf '%s\n' "$BOOTSTRAP_BACKEND_HCL" > infra/bootstrap/gcp/backend.hcl
@@ -71,13 +92,22 @@ jobs:
             test -n "$bootstrap_prefix"
             test -n "$application_prefix"
             test "$bootstrap_prefix" != "$application_prefix"
-            terraform -chdir=infra/bootstrap/gcp init -input=false -lockfile=readonly -backend-config=backend.hcl
-            terraform -chdir=infra/bootstrap/gcp plan -input=false -lock-timeout=5m -out="$RUNNER_TEMP/gcp-deployment/bootstrap.tfplan"
-            terraform -chdir=infra/bootstrap/gcp apply -input=false -lock-timeout=5m "$RUNNER_TEMP/gcp-deployment/bootstrap.tfplan"
-          } > "$RUNNER_TEMP/gcp-deployment/bootstrap.log" 2>&1 || {
-            printf 'Bootstrap plan/apply failed. Application infrastructure was not planned. Check bootstrap backend variables and IAM permissions.\n' >&2
+          } > "$RUNNER_TEMP/gcp-deployment/bootstrap-preflight.log" 2>&1; then
+            printf 'Bootstrap preflight failed. Check that the backend prefix is correct and differs from application/single.\n' >&2
             exit 1
-          }
+          fi
+          if ! terraform -chdir=infra/bootstrap/gcp init -input=false -no-color -lockfile=readonly -backend-config=backend.hcl > "$RUNNER_TEMP/gcp-deployment/bootstrap-init.stdout.log" 2> "$RUNNER_TEMP/gcp-deployment/bootstrap-init.stderr.log"; then
+            report_bootstrap_failure init "$RUNNER_TEMP/gcp-deployment/bootstrap-init.stderr.log"
+            exit 1
+          fi
+          if ! terraform -chdir=infra/bootstrap/gcp plan -input=false -no-color -lock-timeout=5m -out="$RUNNER_TEMP/gcp-deployment/bootstrap.tfplan" > "$RUNNER_TEMP/gcp-deployment/bootstrap-plan.stdout.log" 2> "$RUNNER_TEMP/gcp-deployment/bootstrap-plan.stderr.log"; then
+            report_bootstrap_failure plan "$RUNNER_TEMP/gcp-deployment/bootstrap-plan.stderr.log"
+            exit 1
+          fi
+          if ! terraform -chdir=infra/bootstrap/gcp apply -input=false -no-color -lock-timeout=5m "$RUNNER_TEMP/gcp-deployment/bootstrap.tfplan" > "$RUNNER_TEMP/gcp-deployment/bootstrap-apply.stdout.log" 2> "$RUNNER_TEMP/gcp-deployment/bootstrap-apply.stderr.log"; then
+            report_bootstrap_failure apply "$RUNNER_TEMP/gcp-deployment/bootstrap-apply.stderr.log"
+            exit 1
+          fi
       - name: Configure the single application root
         shell: bash
         run: |

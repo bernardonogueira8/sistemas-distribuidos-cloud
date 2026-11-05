@@ -334,6 +334,47 @@ test('infrastructure applies the existing bootstrap state before initializing ap
   }
 });
 
+test('bootstrap failures report a sanitized stage and authorization category without applying the app plan', () => {
+  const steps = workflow('infrastructure').jobs.deployment.steps;
+  const bootstrap = steps.find((step) => step.name === 'Apply the existing bootstrap state first');
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-bootstrap-failure-'));
+  try {
+    fs.mkdirSync(path.join(temporary, 'infra/bootstrap/gcp'), { recursive: true });
+    fs.mkdirSync(path.join(temporary, 'gcp-deployment'));
+    const mock = String.raw`terraform() {
+      printf '%s\n' "$2" >> "$TRACE"
+      case "$2" in
+        init) return 0 ;;
+        plan)
+          printf 'Error: googleapi: Error 403: Forbidden on "secret-project" for deployer@example.test\n  on main.tf line 70, in resource\n' >&2
+          return 7
+          ;;
+        apply) return 99 ;;
+        *) return 98 ;;
+      esac
+    }
+`;
+    const result = runScript(`${mock}${bootstrap.run}`, {
+      cwd: temporary,
+      env: {
+        RUNNER_TEMP: temporary,
+        TRACE: path.join(temporary, 'trace'),
+        BOOTSTRAP_BACKEND_HCL: 'bucket = "test-state"\nprefix = "bootstrap/prod"',
+        BOOTSTRAP_TFVARS: 'project_id = "test-project"',
+        BACKEND_HCL: 'bucket = "test-state"\nprefix = "application/single"',
+      },
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Bootstrap plan failed/);
+    assert.match(result.stderr, /Terraform diagnostic: googleapi: Error 403: Forbidden on "\[redacted\]" for \[redacted identity\]/);
+    assert.match(result.stderr, /Bootstrap error category: GCP API authorization or permission failure/);
+    assert.doesNotMatch(result.stdout + result.stderr, /secret-project|deployer@example\.test/);
+    assert.deepEqual(fs.readFileSync(path.join(temporary, 'trace'), 'utf8').trim().split('\n'), ['init', 'plan']);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
 for (const name of ['release', 'infrastructure']) {
   test(`${name} applies only its generated binary, hides failures and removes private files`, () => {
     const steps = Object.values(workflow(name).jobs)[0].steps;
