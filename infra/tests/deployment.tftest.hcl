@@ -40,6 +40,23 @@ variables {
   image                 = ""
 }
 
+run "monitoring_dashboard_contract" {
+  command = plan
+
+  assert {
+    condition     = google_logging_metric.api_request_count.metric_descriptor[0].metric_kind == "DELTA" && google_logging_metric.api_request_count.label_extractors["region"] == "REGEXP_EXTRACT(resource.labels.zone, \"^(.+)-[a-z]$\")"
+    error_message = "Application request metrics must use bounded region and zone labels from the GCE resource."
+  }
+  assert {
+    condition     = strcontains(google_logging_metric.api_request_count.filter, "jsonPayload.message") && strcontains(google_logging_metric.api_request_count.filter, "GoogleHC/1.0") && length(jsondecode(google_monitoring_dashboard.api_requests.dashboard_json).gridLayout.widgets) == 5
+    error_message = "The dashboard must count structured application requests without health checks and include the five request views."
+  }
+  assert {
+    condition     = strcontains(jsondecode(google_monitoring_dashboard.api_requests.dashboard_json).gridLayout.widgets[0].xyChart.dataSets[0].timeSeriesQuery.timeSeriesFilter.filter, "application_lb/request_count") && strcontains(jsondecode(google_monitoring_dashboard.api_requests.dashboard_json).gridLayout.widgets[2].xyChart.dataSets[0].timeSeriesQuery.timeSeriesFilter.filter, "api_request_count")
+    error_message = "The dashboard must keep global load-balancer counts distinct from per-region application counts."
+  }
+}
+
 run "initial_infrastructure_without_image" {
   command = plan
 
