@@ -37,6 +37,10 @@ run "restricted_identity_and_state" {
     condition     = google_storage_bucket_iam_member.deployer_state.role == "roles/storage.objectAdmin"
     error_message = "Deployer requires state object/lock operations."
   }
+  assert {
+    condition     = contains([for grant in google_project_iam_member.deployer : grant.role], "roles/dns.admin")
+    error_message = "Deployer must read the existing Cloud DNS zone and manage its record sets."
+  }
 }
 run "invalid_environment" {
   command = plan
