@@ -45,6 +45,10 @@ run "restricted_identity_and_state" {
     condition     = contains([for grant in google_project_iam_member.deployer : grant.role], "roles/serviceusage.serviceUsageAdmin") && google_project_service.dns.service == "dns.googleapis.com" && !google_project_service.dns.disable_on_destroy
     error_message = "Bootstrap must grant API enablement permission and enable Cloud DNS before the application root uses it."
   }
+  assert {
+    condition     = contains([for grant in google_project_iam_member.deployer : grant.role], "roles/iam.workloadIdentityPoolAdmin")
+    error_message = "The deployer must read and manage the existing GitHub Workload Identity Pool during bootstrap refresh and apply."
+  }
 }
 run "invalid_environment" {
   command = plan
