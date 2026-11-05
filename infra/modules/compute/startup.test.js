@@ -49,10 +49,10 @@ test('credential bootstrap validates JSON and uses short-lived metadata ADC', as
   assert.equal(result.requests[1].options.headers.Authorization, 'Bearer test-token');
 });
 
-test('host firewall admits only GFE health traffic and is idempotent on startup', () => {
+test('host firewall admits direct IPv4 and GFE health traffic and is idempotent on startup', () => {
   const firewall = template.slice(template.indexOf('for source_range in '), template.indexOf('docker run -d --name cloud-api'));
-  assert.match(firewall, /35\.191\.0\.0\/16 130\.211\.0\.0\/22/);
-  assert.doesNotMatch(firewall, /0\.0\.0\.0\/0|--dport (?!3000)/);
+  assert.match(firewall, /0\.0\.0\.0\/0 35\.191\.0\.0\/16 130\.211\.0\.0\/22/);
+  assert.doesNotMatch(firewall, /--dport (?!3000)/);
   const mock = String.raw`
     inserted=""
     iptables() {
@@ -67,7 +67,7 @@ test('host firewall admits only GFE health traffic and is idempotent on startup'
   `;
   const result = spawnSync('/bin/bash', ['-eu', '-c', `${mock}${firewall}\n${firewall}`], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, 'INSERT 35.191.0.0/16\nINSERT 130.211.0.0/22\n');
+  assert.equal(result.stdout, 'INSERT 0.0.0.0/0\nINSERT 35.191.0.0/16\nINSERT 130.211.0.0/22\n');
 });
 
 test('invalid credentials cannot inject Docker environment entries or leak in logs', async () => {
