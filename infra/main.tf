@@ -41,15 +41,16 @@ module "database" {
 }
 
 module "storage" {
-  source                  = "./modules/storage"
-  name                    = var.name
-  project_id              = var.project_id
-  region                  = var.region
-  bucket_name             = var.bucket_name
-  labels                  = local.labels
-  runtime_service_account = google_service_account.runtime.email
-  runtime_identity        = google_service_account.runtime.name
-  build_service_account   = var.build_service_account
+  source                         = "./modules/storage"
+  name                           = var.name
+  project_id                     = var.project_id
+  region                         = var.region
+  bucket_name                    = var.bucket_name
+  labels                         = local.labels
+  runtime_service_account        = google_service_account.runtime.email
+  runtime_identity               = google_service_account.runtime.name
+  build_service_account          = var.build_service_account
+  destroy_upload_bucket_contents = var.destroy_upload_bucket_contents
 }
 
 module "compute" {

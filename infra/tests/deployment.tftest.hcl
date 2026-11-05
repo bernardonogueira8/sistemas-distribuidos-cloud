@@ -80,6 +80,10 @@ run "initial_infrastructure_without_image" {
     condition     = !issensitive(output.deployment) && !can(output.deployment.DB_PASSWORD) && !can(output.deployment.password) && !can(output.deployment.secret_data)
     error_message = "The deployment contract must not expose SQL credentials."
   }
+  assert {
+    condition     = !var.destroy_upload_bucket_contents
+    error_message = "Normal infrastructure operations must never force-delete uploaded objects."
+  }
 }
 
 run "enable_digest_pinned_runtime" {
@@ -108,6 +112,16 @@ run "enable_digest_pinned_runtime" {
   assert {
     condition     = output.deployment.domain_url == "http://sistemasdistribuidosunifan.com.br" && output.deployment.dns_record_name == "sistemasdistribuidosunifan.com.br."
     error_message = "The existing Cloud DNS zone must publish the configured domain to the global load balancer."
+  }
+}
+
+run "full_destroy_explicitly_allows_uploaded_object_deletion" {
+  command = plan
+  variables { destroy_upload_bucket_contents = true }
+
+  assert {
+    condition     = var.destroy_upload_bucket_contents
+    error_message = "Only the explicit full-destroy override may force-delete uploaded objects."
   }
 }
 

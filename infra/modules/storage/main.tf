@@ -3,11 +3,10 @@ resource "google_storage_bucket" "uploads" {
   location                    = var.region
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
-  force_destroy               = false
+  force_destroy               = var.destroy_upload_bucket_contents
   labels                      = var.labels
   versioning { enabled = true }
   soft_delete_policy { retention_duration_seconds = 604800 }
-  lifecycle { prevent_destroy = true }
 }
 
 resource "google_artifact_registry_repository" "app" {

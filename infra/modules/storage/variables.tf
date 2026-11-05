@@ -6,3 +6,4 @@ variable "labels" { type = map(string) }
 variable "runtime_service_account" { type = string }
 variable "runtime_identity" { type = string }
 variable "build_service_account" { type = string }
+variable "destroy_upload_bucket_contents" { type = bool }

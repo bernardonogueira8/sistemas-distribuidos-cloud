@@ -147,3 +147,9 @@ variable "image" {
     error_message = "Set a digest-pinned image before enabling runtime."
   }
 }
+
+variable "destroy_upload_bucket_contents" {
+  description = "Allow the dedicated full-destroy workflow to remove all uploaded objects."
+  type        = bool
+  default     = false
+}

@@ -1,9 +1,9 @@
-name: Deploy Infrastructure With Current Image
+name: Provision Or Update Infrastructure
 on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type DEPLOY TO PROD to authorize infrastructure plan and apply
+        description: Type APPLY INFRASTRUCTURE TO PROD to authorize infrastructure plan and apply
         type: string
         required: true
 permissions:
@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   deployment:
-    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'DEPLOY TO PROD'
+    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'APPLY INFRASTRUCTURE TO PROD'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: ${{ vars.GCP_GITHUB_ENVIRONMENT || 'prod' }}
@@ -65,23 +65,54 @@ jobs:
           printf '%s\n' "$TFVARS" > infra/terraform.tfvars
           terraform -chdir=infra init -input=false -lockfile=readonly -backend-config=backend.hcl
           } > "$RUNNER_TEMP/gcp-deployment/init.log" 2>&1
-      - name: Plan infrastructure changes without changing the deployed image
+      - name: Preserve the current runtime or prepare the initial base
         shell: bash
         run: |
           set -euo pipefail
           umask 077
           write_runtime_inputs() {
-            local current image
-            current=$(terraform -chdir=infra output -json deployment) || return 1
-            jq -e '.enable_runtime == true' <<< "$current" >/dev/null || return 1
-            image=$(jq -er '.image | select(type == "string" and test("^[a-z0-9-]+-docker\\.pkg\\.dev/[a-z0-9-]+/[a-z0-9-]+/api@sha256:[a-f0-9]{64}$"))' <<< "$current") || return 1
-            printf 'enable_runtime = true\nimage = "%s"\n' "$image" > infra/release.auto.tfvars || return 1
+            local outputs current enabled image resources
+            outputs=$(terraform -chdir=infra output -json) || return 1
+            current=$(jq -c '.deployment.value // null' <<< "$outputs") || return 1
+            if [[ "$current" == null ]]; then
+              resources=$(terraform -chdir=infra state list) || return 1
+              [[ -z "$resources" ]] || return 1
+              enabled=false
+              image=""
+            else
+              enabled=$(jq -er '.enable_runtime | select(type == "boolean") | tostring' <<< "$current") || return 1
+              if [[ "$enabled" == true ]]; then
+                image=$(jq -er '.image | select(type == "string" and test("^[a-z0-9-]+-docker\\.pkg\\.dev/[a-z0-9-]+/[a-z0-9_-]+/api@sha256:[a-f0-9]{64}$"))' <<< "$current") || return 1
+              else
+                resources=$(terraform -chdir=infra state list) || return 1
+                if [[ "$resources" == *'module.compute['* || "$resources" == *'module.compute_secondary['* || "$resources" == *'module.load_balancer['* ]]; then
+                  image=$(terraform -chdir=infra state pull | jq -er '
+                    [.resources[] | select((.module == "module.compute[0]" or .module == "module.compute_secondary[0]") and .type == "google_compute_instance_template") |
+                      .instances[].attributes.metadata["startup-script"] |
+                      capture("(?:^|\\n)IMAGE=\\u0027(?<image>[a-z0-9-]+-docker\\.pkg\\.dev/[a-z0-9-]+/[a-z0-9_-]+/api@sha256:[a-f0-9]{64})\\u0027(?:\\n|$)").image] |
+                    unique | select(length == 1) | .[0]
+                  ') || return 1
+                  enabled=true
+                else
+                  image=""
+                fi
+              fi
+            fi
+            printf 'enable_runtime = %s\nimage = "%s"\n' "$enabled" "$image" > infra/release.auto.tfvars || return 1
           }
           if ! write_runtime_inputs > "$RUNNER_TEMP/gcp-deployment/inputs.log" 2>&1; then
-            printf 'Infrastructure preflight failed. The current state must have runtime enabled and a digest-pinned image; use Publish And Deploy API for the first deployment.\n' >&2
+            printf 'Infrastructure preflight failed. State is incomplete or does not contain one safe runtime image.\n' >&2
             exit 1
           fi
-          terraform -chdir=infra plan -input=false -lock-timeout=5m -out="$RUNNER_TEMP/gcp-deployment/deployment.tfplan" > "$RUNNER_TEMP/gcp-deployment/plan.stdout.log" 2> "$RUNNER_TEMP/gcp-deployment/plan.stderr.log" || { printf 'Terraform plan failed.\n' >&2; exit 1; }
+          if ! terraform -chdir=infra plan -input=false -lock-timeout=5m -no-color -out="$RUNNER_TEMP/gcp-deployment/deployment.tfplan" > "$RUNNER_TEMP/gcp-deployment/plan.stdout.log" 2> "$RUNNER_TEMP/gcp-deployment/plan.stderr.log"; then
+            diagnostic=$(awk '/^Error: / { sub(/^Error: /, ""); gsub(/"[^"]*"/, "\"[redacted]\""); gsub(/[[:alnum:]_.+-]+@[[:alnum:].-]+/, "[redacted identity]"); print substr($0, 1, 240); exit }' "$RUNNER_TEMP/gcp-deployment/plan.stderr.log")
+            printf 'Terraform plan failed.\n' >&2
+            if [[ -n "$diagnostic" ]]; then printf 'Terraform diagnostic: %s\n' "$diagnostic" >&2; fi
+            if grep -Eiq '403|permission denied|not authorized|unauthorized' "$RUNNER_TEMP/gcp-deployment/plan.stderr.log"; then
+              printf 'Terraform error category: GCP API authorization or permission failure.\n' >&2
+            fi
+            exit 1
+          fi
       - name: Apply the exact plan in this runner
         shell: bash
         run: |
@@ -100,6 +131,10 @@ jobs:
           umask 077
           {
           deployment=$(terraform -chdir=infra output -json deployment)
+          if ! jq -e '.enable_runtime == true' <<< "$deployment" >/dev/null; then
+            printf 'Base infrastructure is ready; runtime remains disabled.\n' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           node scripts/check-runtime-gcp.js
           url=$(jq -er '.api_url' <<< "$deployment")
           curl --fail --silent --show-error --retry 30 --retry-all-errors --retry-delay 10 --max-time 10 "$url" >/dev/null

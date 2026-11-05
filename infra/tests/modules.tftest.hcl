@@ -89,18 +89,19 @@ run "private_storage_and_signing" {
   command = plan
   module { source = "./modules/storage" }
   variables {
-    name                    = "distributed-cloud"
-    project_id              = "example-project"
-    region                  = "us-central1"
-    bucket_name             = "example-project-uploads"
-    labels                  = {}
-    runtime_service_account = "runtime@example-project.iam.gserviceaccount.com"
-    runtime_identity        = "projects/example-project/serviceAccounts/runtime@example-project.iam.gserviceaccount.com"
-    build_service_account   = "builder@example-project.iam.gserviceaccount.com"
+    name                           = "distributed-cloud"
+    project_id                     = "example-project"
+    region                         = "us-central1"
+    bucket_name                    = "example-project-uploads"
+    labels                         = {}
+    runtime_service_account        = "runtime@example-project.iam.gserviceaccount.com"
+    runtime_identity               = "projects/example-project/serviceAccounts/runtime@example-project.iam.gserviceaccount.com"
+    build_service_account          = "builder@example-project.iam.gserviceaccount.com"
+    destroy_upload_bucket_contents = false
   }
   assert {
     condition     = google_storage_bucket.uploads.public_access_prevention == "enforced" && google_storage_bucket.uploads.uniform_bucket_level_access && !google_storage_bucket.uploads.force_destroy
-    error_message = "Uploads must remain private and protected from force deletion."
+    error_message = "Uploads must remain private and force deletion must be off by default."
   }
   assert {
     condition     = toset(google_project_iam_custom_role.sign_blob.permissions) == toset(["iam.serviceAccounts.signBlob"]) && google_service_account_iam_member.sign_blob.member == "serviceAccount:runtime@example-project.iam.gserviceaccount.com"

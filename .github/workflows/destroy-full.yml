@@ -1,0 +1,147 @@
+name: Destroy Application And Data
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type DESTROY APPLICATION AND DATA to remove all application resources
+        type: string
+        required: true
+      backup_confirmation:
+        description: Type BACKUP VERIFIED after confirming external database and object backups
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: application-gcp-state
+  cancel-in-progress: false
+jobs:
+  destroy-full:
+    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'DESTROY APPLICATION AND DATA' && inputs.backup_confirmation == 'BACKUP VERIFIED'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ vars.GCP_GITHUB_ENVIRONMENT || 'prod' }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_IN_AUTOMATION: 'true'
+      BACKEND_HCL: ${{ vars.GCP_BACKEND_HCL }}
+      TFVARS: ${{ vars.GCP_TFVARS }}
+    steps:
+      - name: Prepare private runner files
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/gcp-destroy"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+        with:
+          terraform_version: '1.11.4'
+          terraform_wrapper: false
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        id: deployer
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_APPLY_SERVICE_ACCOUNT }}
+          cleanup_credentials: true
+      - name: Keep deployer credentials outside checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          destination="$RUNNER_TEMP/gcp-destroy/deployer-credentials.json"
+          mv "$GOOGLE_GHA_CREDS_PATH" "$destination"
+          chmod 600 "$destination"
+          for variable in GOOGLE_GHA_CREDS_PATH GOOGLE_APPLICATION_CREDENTIALS CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE; do
+            printf '%s=%s\n' "$variable" "$destination" >> "$GITHUB_ENV"
+          done
+      - name: Initialize application state
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            test -n "$BACKEND_HCL"
+            test -n "$TFVARS"
+            printf '%s\n' "$BACKEND_HCL" > infra/backend.hcl
+            printf '%s\n' "$TFVARS" > infra/terraform.tfvars
+            terraform -chdir=infra init -input=false -lockfile=readonly -backend-config=backend.hcl
+          } > "$RUNNER_TEMP/gcp-destroy/init.log" 2>&1
+      - name: Verify the exact production application state and backup acknowledgement
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            grep -Fxq 'bucket = "sistemas-distribuidos-cloud"' infra/backend.hcl
+            grep -Fxq 'prefix = "application/single"' infra/backend.hcl
+            deployment=$(terraform -chdir=infra output -json deployment)
+            jq -e '.project_id == "dev-performance-359512" and .name == "distributed-cloud"' <<< "$deployment" >/dev/null
+            printf 'deletion_protection = false\ndestroy_upload_bucket_contents = true\n' > infra/release.auto.tfvars
+          } > "$RUNNER_TEMP/gcp-destroy/preflight.log" 2>&1 || {
+            printf 'Full destroy preflight failed. Refusing to target a non-application state.\n' >&2
+            exit 1
+          }
+          printf 'Full teardown requested. SQL and all uploaded objects will be permanently deleted after the verified-backup acknowledgement.\n' >> "$GITHUB_STEP_SUMMARY"
+      - name: Plan SQL deletion-protection release
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          terraform -chdir=infra plan -input=false -no-color -lock-timeout=5m -target=module.database.google_sql_database_instance.app -out="$RUNNER_TEMP/gcp-destroy/unprotect-sql.tfplan" > "$RUNNER_TEMP/gcp-destroy/unprotect.stdout.log" 2> "$RUNNER_TEMP/gcp-destroy/unprotect.stderr.log" || {
+            printf 'Could not plan SQL deletion-protection release.\n' >&2
+            exit 1
+          }
+      - name: Release SQL deletion protection
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          terraform -chdir=infra apply -input=false -no-color -lock-timeout=5m "$RUNNER_TEMP/gcp-destroy/unprotect-sql.tfplan" > "$RUNNER_TEMP/gcp-destroy/unprotect-apply.stdout.log" 2> "$RUNNER_TEMP/gcp-destroy/unprotect-apply.stderr.log" || {
+            printf 'Could not release SQL deletion protection. No full destroy was attempted.\n' >&2
+            exit 1
+          }
+      - name: Plan full application and data destruction
+        id: destroy-plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          terraform -chdir=infra plan -destroy -input=false -no-color -lock-timeout=5m -out="$RUNNER_TEMP/gcp-destroy/full-destroy.tfplan" > "$RUNNER_TEMP/gcp-destroy/destroy-plan.stdout.log" 2> "$RUNNER_TEMP/gcp-destroy/destroy-plan.stderr.log" || {
+            printf 'Full destroy plan failed. SQL deletion protection has been released; review and restore it if destruction is not proceeding.\n' >&2
+            exit 1
+          }
+          terraform -chdir=infra show -json "$RUNNER_TEMP/gcp-destroy/full-destroy.tfplan" | jq -e '
+            [.resource_changes[]? | select((.change.actions | index("delete")) != null) | .address] as $deletes |
+            ($deletes | any(. == "module.database.google_sql_database_instance.app")) and
+            ($deletes | any(. == "module.storage.google_storage_bucket.uploads"))
+          ' >/dev/null || {
+            printf 'Full destroy plan did not include both SQL and the uploads bucket; refusing to apply.\n' >&2
+            exit 1
+          }
+          {
+            printf '\n### Full destroy resource actions\n\n'
+            printf '```text\n'
+            terraform -chdir=infra show -json "$RUNNER_TEMP/gcp-destroy/full-destroy.tfplan" | jq -r '[.resource_changes[]? | select((.change.actions | index("delete")) != null) | .address] | unique[]'
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Apply exact full destroy plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          terraform -chdir=infra apply -input=false -no-color -lock-timeout=5m "$RUNNER_TEMP/gcp-destroy/full-destroy.tfplan" > "$RUNNER_TEMP/gcp-destroy/destroy-apply.stdout.log" 2> "$RUNNER_TEMP/gcp-destroy/destroy-apply.stderr.log" || {
+            printf 'Full destroy apply failed; inspect GCP resource state before any retry.\n' >&2
+            exit 1
+          }
+      - name: Remove private deployment files
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/gcp-destroy" infra/.terraform
+          rm -f -- infra/backend.hcl infra/terraform.tfvars infra/release.auto.tfvars
+          rm -f -- infra/errored.tfstate infra/crash.log infra/crash.*.log
+          if [[ -n "$ORIGINAL_CREDENTIALS" ]]; then rm -f -- "$ORIGINAL_CREDENTIALS"; fi
+        env:
+          ORIGINAL_CREDENTIALS: ${{ steps.deployer.outputs.credentials_file_path }}

@@ -1,9 +1,9 @@
-name: Publish And Deploy API
+name: Release API
 on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: Type DEPLOY TO PROD to authorize build, schema, plan and apply
+        description: Type RELEASE API TO PROD to authorize build, schema, plan and apply
         type: string
         required: true
 permissions:
@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
-    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'DEPLOY TO PROD'
+    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'RELEASE API TO PROD'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: ${{ vars.GCP_GITHUB_ENVIRONMENT || 'prod' }}
@@ -71,74 +71,7 @@ jobs:
           printf '%s\n' "$TFVARS" > infra/terraform.tfvars
           terraform -chdir=infra init -input=false -lockfile=readonly -backend-config=backend.hcl
           } > "$RUNNER_TEMP/gcp-deployment/init.log" 2>&1
-      - name: Plan infrastructure with the current runtime
-        id: base-plan
-        shell: bash
-        run: |
-          set -euo pipefail
-          umask 077
-          write_runtime_inputs() {
-            local outputs current enabled image resources
-            outputs=$(terraform -chdir=infra output -json) || return 1
-            current=$(jq -c '.deployment.value // null' <<< "$outputs") || return 1
-            if [[ "$current" == null ]]; then
-              resources=$(terraform -chdir=infra state list) || return 1
-              [[ -z "$resources" ]] || return 1
-              printf 'enable_runtime = false\nimage = ""\n' > infra/release.auto.tfvars || return 1
-              return 0
-            fi
-            enabled=$(jq -er '.enable_runtime | select(type == "boolean") | tostring' <<< "$current") || return 1
-            if [[ "$enabled" == true ]]; then
-              image=$(jq -er '.image | select(type == "string" and test("^[a-z0-9-]+-docker\\.pkg\\.dev/[a-z0-9-]+/[a-z0-9_-]+/api@sha256:[a-f0-9]{64}$"))' <<< "$current") || return 1
-            else
-              resources=$(terraform -chdir=infra state list) || return 1
-              if [[ "$resources" == *'module.compute['* || "$resources" == *'module.compute_secondary['* || "$resources" == *'module.load_balancer['* ]]; then
-                image=$(terraform -chdir=infra state pull | jq -er '
-                  [.resources[] | select((.module == "module.compute[0]" or .module == "module.compute_secondary[0]") and .type == "google_compute_instance_template") |
-                    .instances[].attributes.metadata["startup-script"] |
-                    capture("(?:^|\\n)IMAGE=\u0027(?<image>[a-z0-9-]+-docker\\.pkg\\.dev/[a-z0-9-]+/[a-z0-9_-]+/api@sha256:[a-f0-9]{64})\u0027(?:\\n|$)").image] |
-                  unique | select(length == 1) | .[0]
-                ') || return 1
-                enabled=true
-              else
-                image=""
-              fi
-            fi
-            printf 'enable_runtime = %s\nimage = "%s"\n' "$enabled" "$image" > infra/release.auto.tfvars || return 1
-          }
-          if ! write_runtime_inputs > "$RUNNER_TEMP/gcp-deployment/base-inputs.log" 2>&1; then
-            printf 'Infrastructure preflight failed. Cannot safely preserve the current runtime from state.\n' >&2
-            exit 1
-          fi
-          if ! terraform -chdir=infra plan -input=false -lock-timeout=5m -out="$RUNNER_TEMP/gcp-deployment/base.tfplan" > "$RUNNER_TEMP/gcp-deployment/base-plan.stdout.log" 2> "$RUNNER_TEMP/gcp-deployment/base-plan.stderr.log"; then
-            diagnostic=$(awk '
-              /^Error: / {
-                sub(/^Error: /, "")
-                gsub(/"[^"]*"/, "\"[redacted]\"")
-                gsub(/[[:alnum:]_.+-]+@[[:alnum:].-]+/, "[redacted identity]")
-                gsub(/sha256:[[:xdigit:]]+/, "sha256:[redacted]")
-                gsub(/https?:\/\/[^ ]+/, "[redacted URL]")
-                print substr($0, 1, 240)
-                exit
-              }
-            ' "$RUNNER_TEMP/gcp-deployment/base-plan.stderr.log")
-            location=$(awk '/^  on / { sub(/^  /, ""); print; exit }' "$RUNNER_TEMP/gcp-deployment/base-plan.stderr.log")
-            printf 'Infrastructure plan failed.\n' >&2
-            if [[ -n "$diagnostic" ]]; then printf 'Terraform diagnostic: %s\n' "$diagnostic" >&2; fi
-            if [[ -n "$location" ]]; then printf 'Terraform location: %s\n' "$location" >&2; fi
-            if grep -Eiq '403|permission denied|not authorized|unauthorized' "$RUNNER_TEMP/gcp-deployment/base-plan.stderr.log"; then
-              printf 'Terraform error category: GCP API authorization or permission failure.\n' >&2
-            fi
-            exit 1
-          fi
-      - name: Apply the exact infrastructure plan before publishing
-        id: base-apply
-        shell: bash
-        run: |
-          set -euo pipefail
-          umask 077
-          terraform -chdir=infra apply -input=false -lock-timeout=5m "$RUNNER_TEMP/gcp-deployment/base.tfplan" > "$RUNNER_TEMP/gcp-deployment/base-apply.stdout.log" 2> "$RUNNER_TEMP/gcp-deployment/base-apply.stderr.log" || { printf 'Infrastructure apply failed.\n' >&2; exit 1; }
-      - name: Read the updated infrastructure outputs
+      - name: Read provisioned infrastructure outputs
         id: deployment
         shell: bash
         run: |
