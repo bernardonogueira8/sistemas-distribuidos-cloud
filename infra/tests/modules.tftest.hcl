@@ -18,7 +18,11 @@ run "private_network" {
   }
   assert {
     condition     = toset(google_compute_firewall.gfe.source_ranges) == toset(["35.191.0.0/16", "130.211.0.0/22"]) && toset(one(google_compute_firewall.gfe.allow).ports) == toset(["3000"])
-    error_message = "Only GFE/health-check ranges may reach the API port."
+    error_message = "The load balancer health-check rule must stay limited to Google frontend ranges."
+  }
+  assert {
+    condition     = toset(google_compute_firewall.api_direct.source_ranges) == toset(["0.0.0.0/0"]) && toset(one(google_compute_firewall.api_direct.allow).ports) == toset(["3000"])
+    error_message = "Direct API access must be available over IPv4 TCP port 3000."
   }
 }
 
@@ -144,8 +148,8 @@ run "private_two_zone_compute" {
     error_message = "Maintain at least two replicas, with two surge instances and no planned unavailability."
   }
   assert {
-    condition     = length(google_compute_instance_template.api.network_interface[0].access_config) == 0
-    error_message = "Runtime instances must not have public IPs."
+    condition     = length(google_compute_instance_template.api.network_interface[0].access_config) == 1
+    error_message = "Each runtime instance must receive an ephemeral public IPv4 address for direct API access."
   }
   assert {
     condition     = strcontains(google_compute_instance_template.api.metadata["startup-script"], "versions/1:access") && !strcontains(google_compute_instance_template.api.metadata["startup-script"], "mock-password")

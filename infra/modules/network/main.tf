@@ -64,6 +64,18 @@ resource "google_compute_firewall" "gfe" {
   log_config { metadata = "EXCLUDE_ALL_METADATA" }
 }
 
+resource "google_compute_firewall" "api_direct" {
+  name          = "${var.name}-api-direct"
+  network       = google_compute_network.app.id
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["${var.name}-api"]
+  allow {
+    protocol = "tcp"
+    ports    = ["3000"]
+  }
+  log_config { metadata = "EXCLUDE_ALL_METADATA" }
+}
+
 resource "google_compute_subnetwork" "secondary" {
   count                    = var.secondary_region == null ? 0 : 1
   name                     = "${var.name}-secondary"

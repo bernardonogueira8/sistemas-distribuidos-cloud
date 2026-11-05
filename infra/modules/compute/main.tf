@@ -31,6 +31,7 @@ resource "google_compute_instance_template" "api" {
   }
   network_interface {
     subnetwork = var.subnetwork
+    access_config {}
   }
   service_account {
     email  = var.runtime_service_account
