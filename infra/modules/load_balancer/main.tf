@@ -10,6 +10,14 @@ resource "google_compute_backend_service" "api" {
     balancing_mode  = "UTILIZATION"
     capacity_scaler = 1
   }
+  dynamic "backend" {
+    for_each = var.additional_instance_groups
+    content {
+      group           = backend.value
+      balancing_mode  = "UTILIZATION"
+      capacity_scaler = 1
+    }
+  }
   log_config {
     enable      = true
     sample_rate = 1

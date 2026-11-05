@@ -63,3 +63,41 @@ resource "google_compute_firewall" "gfe" {
   }
   log_config { metadata = "EXCLUDE_ALL_METADATA" }
 }
+
+resource "google_compute_subnetwork" "secondary" {
+  count                    = var.secondary_region == null ? 0 : 1
+  name                     = "${var.name}-secondary"
+  region                   = var.secondary_region.region
+  network                  = google_compute_network.app.id
+  ip_cidr_range            = var.secondary_region.cidr
+  private_ip_google_access = true
+  log_config {
+    aggregation_interval = "INTERVAL_5_SEC"
+    flow_sampling        = 0.1
+    metadata             = "EXCLUDE_ALL_METADATA"
+  }
+}
+
+resource "google_compute_router" "secondary" {
+  count   = var.secondary_region == null ? 0 : 1
+  name    = "${var.name}-secondary"
+  region  = var.secondary_region.region
+  network = google_compute_network.app.id
+}
+
+resource "google_compute_router_nat" "secondary" {
+  count                              = var.secondary_region == null ? 0 : 1
+  name                               = "${var.name}-secondary"
+  router                             = google_compute_router.secondary[0].name
+  region                             = var.secondary_region.region
+  nat_ip_allocate_option             = "AUTO_ONLY"
+  source_subnetwork_ip_ranges_to_nat = "LIST_OF_SUBNETWORKS"
+  subnetwork {
+    name                    = google_compute_subnetwork.secondary[0].id
+    source_ip_ranges_to_nat = ["ALL_IP_RANGES"]
+  }
+  log_config {
+    enable = true
+    filter = "ERRORS_ONLY"
+  }
+}

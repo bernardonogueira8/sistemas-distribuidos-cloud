@@ -210,7 +210,7 @@ for (const name of ['release', 'infrastructure']) {
     assert.match(cleanup.run, /rm -f -- "\$ORIGINAL_CREDENTIALS"/);
     const health = steps.find((step) => step.name?.startsWith('Wait for the MIG'));
     assert.ok(steps.indexOf(health) > applyIndex);
-    assert.match(health.run, /managed wait-until[\s\S]*--stable/);
+    assert.match(health.run, /node scripts\/check-runtime-gcp\.js/);
     assert.match(health.run, /curl --fail[\s\S]*SMOKE_ALLOW_HTTP=true node tests\/smoke\/api\.js/);
     for (const step of steps.filter((step) => step.run)) {
       const syntax = spawnSync('bash', ['-n'], { input: step.run, encoding: 'utf8' });

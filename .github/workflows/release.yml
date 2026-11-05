@@ -92,9 +92,9 @@ jobs:
               image=$(jq -er '.image | select(type == "string" and test("^[a-z0-9-]+-docker\\.pkg\\.dev/[a-z0-9-]+/[a-z0-9_-]+/api@sha256:[a-f0-9]{64}$"))' <<< "$current") || return 1
             else
               resources=$(terraform -chdir=infra state list) || return 1
-              if [[ "$resources" == *'module.compute['* || "$resources" == *'module.load_balancer['* ]]; then
+              if [[ "$resources" == *'module.compute['* || "$resources" == *'module.compute_secondary['* || "$resources" == *'module.load_balancer['* ]]; then
                 image=$(terraform -chdir=infra state pull | jq -er '
-                  [.resources[] | select(.module == "module.compute[0]" and .type == "google_compute_instance_template") |
+                  [.resources[] | select((.module == "module.compute[0]" or .module == "module.compute_secondary[0]") and .type == "google_compute_instance_template") |
                     .instances[].attributes.metadata["startup-script"] |
                     capture("(?:^|\\n)IMAGE=\u0027(?<image>[a-z0-9-]+-docker\\.pkg\\.dev/[a-z0-9-]+/[a-z0-9_-]+/api@sha256:[a-f0-9]{64})\u0027(?:\\n|$)").image] |
                   unique | select(length == 1) | .[0]
@@ -193,8 +193,7 @@ jobs:
           umask 077
           {
           deployment=$(terraform -chdir=infra output -json deployment)
-          gcloud compute instance-groups managed wait-until "$(jq -er '.mig' <<< "$deployment")" --stable \
-            --project="$(jq -er '.project_id' <<< "$deployment")" --region="$(jq -er '.region' <<< "$deployment")" --timeout=900
+          node scripts/check-runtime-gcp.js
           url=$(jq -er '.api_url' <<< "$deployment")
           curl --fail --silent --show-error --retry 30 --retry-all-errors --retry-delay 10 --max-time 10 "$url" >/dev/null
           SMOKE_ALLOW_HTTP=true node tests/smoke/api.js "$url"

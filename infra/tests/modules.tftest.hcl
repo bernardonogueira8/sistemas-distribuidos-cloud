@@ -22,6 +22,39 @@ run "private_network" {
   }
 }
 
+run "secondary_network" {
+  command = plan
+  module { source = "./modules/network" }
+  variables {
+    name             = "distributed-cloud"
+    region           = "us-central1"
+    secondary_region = { region = "europe-west3", cidr = "10.42.16.0/20" }
+  }
+  assert {
+    condition     = google_compute_subnetwork.app.region == "us-central1" && google_compute_subnetwork.app.ip_cidr_range == "10.42.0.0/20" && google_compute_subnetwork.secondary[0].region == "europe-west3" && google_compute_subnetwork.secondary[0].ip_cidr_range == "10.42.16.0/20" && google_compute_subnetwork.secondary[0].private_ip_google_access
+    error_message = "Preserve the primary subnet and add a distinct European subnet with private Google access."
+  }
+  assert {
+    condition     = google_compute_router.secondary[0].region == "europe-west3" && google_compute_router_nat.secondary[0].region == "europe-west3" && google_compute_router_nat.secondary[0].source_subnetwork_ip_ranges_to_nat == "LIST_OF_SUBNETWORKS" && length(google_compute_router_nat.secondary[0].subnetwork) == 1
+    error_message = "The secondary region must have its own subnet-scoped NAT."
+  }
+}
+
+run "two_region_load_balancer" {
+  command = plan
+  module { source = "./modules/load_balancer" }
+  variables {
+    name                       = "distributed-cloud"
+    instance_group             = "projects/example-project/regions/us-central1/instanceGroups/distributed-cloud"
+    additional_instance_groups = ["projects/example-project/regions/europe-west3/instanceGroups/distributed-cloud-secondary"]
+    health_check               = "projects/example-project/global/healthChecks/distributed-cloud"
+  }
+  assert {
+    condition     = toset([for backend in google_compute_backend_service.api.backend : backend.group]) == toset([var.instance_group, var.additional_instance_groups[0]]) && alltrue([for backend in google_compute_backend_service.api.backend : backend.balancing_mode == "UTILIZATION" && backend.capacity_scaler == 1])
+    error_message = "One global backend service must route to both regional groups at full capacity."
+  }
+}
+
 run "public_proxy_database_and_shared_sql_identity" {
   command = apply
   module { source = "./modules/database" }

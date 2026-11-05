@@ -15,6 +15,32 @@ variable "region" {
   }
 }
 
+variable "secondary_region" {
+  description = "Secondary API region. SQL, storage and registry remain in the primary region."
+  type = object({
+    region = string
+    zones  = list(string)
+    cidr   = string
+  })
+  default = {
+    region = "europe-west3"
+    zones  = ["europe-west3-a", "europe-west3-b"]
+    cidr   = "10.42.16.0/20"
+  }
+  validation {
+    condition = (
+      var.secondary_region.region != var.region &&
+      can(regex("^[a-z]+-[a-z]+[0-9]+$", var.secondary_region.region)) &&
+      length(var.secondary_region.zones) == 2 &&
+      length(distinct(var.secondary_region.zones)) == 2 &&
+      alltrue([for zone in var.secondary_region.zones : can(regex("^${var.secondary_region.region}-[a-z]$", zone))]) &&
+      can(cidrnetmask(var.secondary_region.cidr)) &&
+      can(regex("^10\\.42\\.(16|32|48|64|80|96|112|128|144|160|176|192|208|224|240)\\.0/20$", var.secondary_region.cidr))
+    )
+    error_message = "Use a different region, two distinct zones in that region, and a nonoverlapping /20 from 10.42.16.0/20 through 10.42.240.0/20."
+  }
+}
+
 variable "name" {
   type    = string
   default = "distributed-cloud"

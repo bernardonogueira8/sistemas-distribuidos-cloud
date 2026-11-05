@@ -22,9 +22,10 @@ resource "google_project_iam_member" "logs" {
 }
 
 module "network" {
-  source = "./modules/network"
-  name   = var.name
-  region = var.region
+  source           = "./modules/network"
+  name             = var.name
+  region           = var.region
+  secondary_region = var.secondary_region
 }
 
 module "database" {
@@ -75,10 +76,35 @@ module "compute" {
 }
 
 module "load_balancer" {
-  source         = "./modules/load_balancer"
-  count          = var.enable_runtime ? 1 : 0
-  name           = var.name
-  domain_name    = var.domain_name
-  instance_group = module.compute[0].instance_group
-  health_check   = module.compute[0].health_check
+  source                     = "./modules/load_balancer"
+  count                      = var.enable_runtime ? 1 : 0
+  name                       = var.name
+  domain_name                = var.domain_name
+  instance_group             = module.compute[0].instance_group
+  additional_instance_groups = [module.compute_secondary[0].instance_group]
+  health_check               = module.compute[0].health_check
+}
+
+module "compute_secondary" {
+  source                  = "./modules/compute"
+  count                   = var.enable_runtime ? 1 : 0
+  name                    = "${var.name}-secondary"
+  project_id              = var.project_id
+  region                  = var.secondary_region.region
+  zones                   = var.secondary_region.zones
+  subnetwork              = module.network.secondary_subnetwork
+  network_tag             = "${var.name}-api"
+  runtime_service_account = google_service_account.runtime.email
+  runtime_secret_id       = module.database.runtime_secret_id
+  runtime_secret_version  = module.database.runtime_secret_version
+  db_host                 = module.database.db_host
+  db_name                 = module.database.db_name
+  bucket                  = module.storage.bucket
+  registry_host           = module.storage.registry_host
+  image                   = var.image
+  machine_type            = var.machine_type
+  min_replicas            = var.min_replicas
+  max_replicas            = var.max_replicas
+  labels                  = local.labels
+  depends_on              = [module.database, module.storage, module.network, google_project_iam_member.logs]
 }

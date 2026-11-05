@@ -100,8 +100,7 @@ jobs:
           umask 077
           {
           deployment=$(terraform -chdir=infra output -json deployment)
-          gcloud compute instance-groups managed wait-until "$(jq -r '.mig' <<< "$deployment")" --stable \
-            --project="$(jq -r '.project_id' <<< "$deployment")" --region="$(jq -r '.region' <<< "$deployment")" --timeout=900
+          node scripts/check-runtime-gcp.js
           url=$(jq -er '.api_url' <<< "$deployment")
           curl --fail --silent --show-error --retry 30 --retry-all-errors --retry-delay 10 --max-time 10 "$url" >/dev/null
           SMOKE_ALLOW_HTTP=true node tests/smoke/api.js "$url"

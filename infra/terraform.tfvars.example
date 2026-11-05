@@ -2,6 +2,12 @@ project_id            = "your-project-id"
 region                = "us-central1"
 name                  = "distributed-cloud"
 zones                 = ["us-central1-a", "us-central1-b"]
+secondary_region = {
+	region = "europe-west3"
+	zones  = ["europe-west3-a", "europe-west3-b"]
+	cidr   = "10.42.16.0/20"
+}
+domain_name           = "sistemasdistribuidosunifan.com.br"
 bucket_name           = "your-project-id-uploads"
 build_service_account = "existing-build@your-project-id.iam.gserviceaccount.com"
 db_tier               = "db-f1-micro"

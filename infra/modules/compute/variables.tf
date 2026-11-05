@@ -15,3 +15,7 @@ variable "machine_type" { type = string }
 variable "min_replicas" { type = number }
 variable "max_replicas" { type = number }
 variable "labels" { type = map(string) }
+variable "network_tag" {
+  type    = string
+  default = null
+}

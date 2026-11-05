@@ -25,6 +25,11 @@ output "deployment" {
     lb_ip                   = try(module.load_balancer[0].ip_address, null)
     mig                     = try(module.compute[0].mig, null)
     instance_group          = try(module.compute[0].instance_group, null)
+    runtime_regions = var.enable_runtime ? [
+      { region = var.region, zones = var.zones, mig = module.compute[0].mig, instance_group = module.compute[0].instance_group },
+      { region = var.secondary_region.region, zones = var.secondary_region.zones, mig = module.compute_secondary[0].mig, instance_group = module.compute_secondary[0].instance_group }
+    ] : []
+    backend_service = try(module.load_balancer[0].backend_service, null)
   }
   depends_on = [module.network, module.database, module.storage, google_project_iam_member.logs]
 }

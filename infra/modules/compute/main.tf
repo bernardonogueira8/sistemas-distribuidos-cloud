@@ -20,7 +20,7 @@ resource "google_compute_instance_template" "api" {
   name_prefix  = "${var.name}-"
   machine_type = var.machine_type
   region       = var.region
-  tags         = ["${var.name}-api"]
+  tags         = [coalesce(var.network_tag, "${var.name}-api")]
   labels       = var.labels
   disk {
     source_image = data.google_compute_image.cos.self_link
