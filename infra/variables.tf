@@ -108,12 +108,22 @@ variable "max_replicas" {
 }
 
 variable "domain_name" {
-  description = "Optional HTTP hostname. Configure its DNS A record separately using deployment.lb_ip."
+  description = "Optional HTTP hostname routed by the global load balancer and its existing Cloud DNS zone."
   type        = string
   default     = "sistemasdistribuidosunifan.com.br"
   validation {
     condition     = var.domain_name == "" || (length(var.domain_name) <= 253 && can(regex("^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$", var.domain_name)))
     error_message = "Use a lowercase DNS hostname without a scheme, port or path, or an empty string for IP-only access."
+  }
+}
+
+variable "dns_managed_zone" {
+  description = "Name of the existing public Cloud DNS managed zone for domain_name."
+  type        = string
+  default     = "sistemasdistribuidosunifan"
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{0,61}[a-z0-9]$", var.dns_managed_zone))
+    error_message = "Use the name of the existing Cloud DNS managed zone, without a trailing dot."
   }
 }
 

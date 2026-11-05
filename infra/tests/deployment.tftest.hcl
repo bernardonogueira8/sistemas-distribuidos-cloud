@@ -1,4 +1,10 @@
 mock_provider "google" {
+  mock_data "google_dns_managed_zone" {
+    defaults = {
+      name     = "sistemasdistribuidosunifan"
+      dns_name = "sistemasdistribuidosunifan.com.br."
+    }
+  }
   mock_resource "google_service_account" {
     defaults = {
       name  = "projects/example-project/serviceAccounts/mock-account@example-project.iam.gserviceaccount.com"
@@ -81,6 +87,10 @@ run "enable_digest_pinned_runtime" {
   assert {
     condition     = length(module.compute_secondary) == 1 && [for target in output.deployment.runtime_regions : target.region] == ["us-central1", "europe-west3"] && output.deployment.runtime_regions[1].mig == "distributed-cloud-secondary"
     error_message = "Runtime must expose both regional MIGs while retaining the legacy primary name."
+  }
+  assert {
+    condition     = output.deployment.domain_url == "http://sistemasdistribuidosunifan.com.br" && output.deployment.dns_record_name == "sistemasdistribuidosunifan.com.br."
+    error_message = "The existing Cloud DNS zone must publish the configured domain to the global load balancer."
   }
 }
 

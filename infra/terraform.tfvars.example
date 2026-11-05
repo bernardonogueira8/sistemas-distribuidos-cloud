@@ -8,6 +8,7 @@ secondary_region = {
 	cidr   = "10.42.16.0/20"
 }
 domain_name           = "sistemasdistribuidosunifan.com.br"
+dns_managed_zone      = "sistemasdistribuidosunifan"
 bucket_name           = "your-project-id-uploads"
 build_service_account = "existing-build@your-project-id.iam.gserviceaccount.com"
 db_tier               = "db-f1-micro"

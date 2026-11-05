@@ -30,6 +30,7 @@ output "deployment" {
       { region = var.secondary_region.region, zones = var.secondary_region.zones, mig = module.compute_secondary[0].mig, instance_group = module.compute_secondary[0].instance_group }
     ] : []
     backend_service = try(module.load_balancer[0].backend_service, null)
+    dns_record_name = try(module.dns[0].record_name, null)
   }
   depends_on = [module.network, module.database, module.storage, google_project_iam_member.logs]
 }

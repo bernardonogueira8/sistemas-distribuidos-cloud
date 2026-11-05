@@ -85,6 +85,15 @@ module "load_balancer" {
   health_check               = module.compute[0].health_check
 }
 
+module "dns" {
+  source = "./modules/dns"
+  count  = var.enable_runtime && var.domain_name != "" ? 1 : 0
+
+  managed_zone = var.dns_managed_zone
+  domain_name  = var.domain_name
+  ip_address   = module.load_balancer[0].ip_address
+}
+
 module "compute_secondary" {
   source                  = "./modules/compute"
   count                   = var.enable_runtime ? 1 : 0
