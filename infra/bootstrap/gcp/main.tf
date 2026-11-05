@@ -64,6 +64,13 @@ resource "google_project_service" "api" {
   disable_on_destroy = false
 }
 
+resource "google_project_service" "dns" {
+  project            = var.project_id
+  service            = "dns.googleapis.com"
+  disable_on_destroy = false
+  depends_on         = [google_project_iam_member.deployer["roles/serviceusage.serviceUsageAdmin"]]
+}
+
 resource "google_storage_bucket" "state" {
   name                        = var.state_bucket_name
   location                    = var.region
@@ -119,7 +126,7 @@ resource "google_project_iam_member" "deployer" {
     "roles/storage.admin", "roles/artifactregistry.admin", "roles/secretmanager.admin",
     "roles/iam.serviceAccountAdmin", "roles/iam.serviceAccountUser", "roles/iam.roleAdmin",
     "roles/resourcemanager.projectIamAdmin", "roles/logging.configWriter", "roles/monitoring.editor",
-    "roles/dns.admin",
+    "roles/serviceusage.serviceUsageAdmin", "roles/dns.admin",
     "roles/serviceusage.serviceUsageConsumer"
   ])
   project = var.project_id

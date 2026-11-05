@@ -158,6 +158,7 @@ run "http_ip_load_balancer" {
   module { source = "./modules/load_balancer" }
   variables {
     name           = "distributed-cloud"
+    domain_name    = ""
     instance_group = "projects/example-project/regions/us-central1/instanceGroups/distributed-cloud"
     health_check   = "projects/example-project/global/healthChecks/distributed-cloud"
   }

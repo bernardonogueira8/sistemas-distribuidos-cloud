@@ -41,6 +41,10 @@ run "restricted_identity_and_state" {
     condition     = contains([for grant in google_project_iam_member.deployer : grant.role], "roles/dns.admin")
     error_message = "Deployer must read the existing Cloud DNS zone and manage its record sets."
   }
+  assert {
+    condition     = contains([for grant in google_project_iam_member.deployer : grant.role], "roles/serviceusage.serviceUsageAdmin") && google_project_service.dns.service == "dns.googleapis.com" && !google_project_service.dns.disable_on_destroy
+    error_message = "Bootstrap must grant API enablement permission and enable Cloud DNS before the application root uses it."
+  }
 }
 run "invalid_environment" {
   command = plan

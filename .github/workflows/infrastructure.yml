@@ -24,6 +24,8 @@ jobs:
       TF_IN_AUTOMATION: 'true'
       BACKEND_HCL: ${{ vars.GCP_BACKEND_HCL }}
       TFVARS: ${{ vars.GCP_TFVARS }}
+      BOOTSTRAP_BACKEND_HCL: ${{ vars.GCP_BOOTSTRAP_BACKEND_HCL }}
+      BOOTSTRAP_TFVARS: ${{ vars.GCP_BOOTSTRAP_TFVARS }}
     steps:
       - name: Prepare private runner files
         run: |
@@ -53,6 +55,29 @@ jobs:
             printf '%s=%s\n' "$variable" "$destination" >> "$GITHUB_ENV"
           done
       - uses: google-github-actions/setup-gcloud@6189d56e4096ee891640bb02ac264be376592d6a
+      - name: Apply the existing bootstrap state first
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            test -n "$BOOTSTRAP_BACKEND_HCL"
+            test -n "$BOOTSTRAP_TFVARS"
+            printf '%s\n' "$BOOTSTRAP_BACKEND_HCL" > infra/bootstrap/gcp/backend.hcl
+            printf '%s\n' "$BOOTSTRAP_TFVARS" > infra/bootstrap/gcp/terraform.tfvars
+            printf '%s\n' "$BACKEND_HCL" > "$RUNNER_TEMP/gcp-deployment/application-backend.hcl"
+            bootstrap_prefix=$(sed -nE 's/^[[:space:]]*prefix[[:space:]]*=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' infra/bootstrap/gcp/backend.hcl | tail -n 1)
+            application_prefix=$(sed -nE 's/^[[:space:]]*prefix[[:space:]]*=[[:space:]]*"([^"]+)"[[:space:]]*$/\1/p' "$RUNNER_TEMP/gcp-deployment/application-backend.hcl" | tail -n 1)
+            test -n "$bootstrap_prefix"
+            test -n "$application_prefix"
+            test "$bootstrap_prefix" != "$application_prefix"
+            terraform -chdir=infra/bootstrap/gcp init -input=false -lockfile=readonly -backend-config=backend.hcl
+            terraform -chdir=infra/bootstrap/gcp plan -input=false -lock-timeout=5m -out="$RUNNER_TEMP/gcp-deployment/bootstrap.tfplan"
+            terraform -chdir=infra/bootstrap/gcp apply -input=false -lock-timeout=5m "$RUNNER_TEMP/gcp-deployment/bootstrap.tfplan"
+          } > "$RUNNER_TEMP/gcp-deployment/bootstrap.log" 2>&1 || {
+            printf 'Bootstrap plan/apply failed. Application infrastructure was not planned. Check bootstrap backend variables and IAM permissions.\n' >&2
+            exit 1
+          }
       - name: Configure the single application root
         shell: bash
         run: |
@@ -147,6 +172,8 @@ jobs:
           set -euo pipefail
           rm -rf -- "$RUNNER_TEMP/gcp-deployment" infra/.terraform
           rm -f -- infra/backend.hcl infra/terraform.tfvars infra/release.auto.tfvars
+          rm -rf -- infra/bootstrap/gcp/.terraform
+          rm -f -- infra/bootstrap/gcp/backend.hcl infra/bootstrap/gcp/terraform.tfvars
           rm -f -- infra/errored.tfstate infra/crash.log infra/crash.*.log
           if [[ -n "$ORIGINAL_CREDENTIALS" ]]; then rm -f -- "$ORIGINAL_CREDENTIALS"; fi
         env:

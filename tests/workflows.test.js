@@ -310,6 +310,30 @@ test('infrastructure provisions an empty base and preserves enabled runtimes fro
   }
 });
 
+test('infrastructure applies the existing bootstrap state before initializing application state', () => {
+  const config = workflow('infrastructure');
+  const job = config.jobs.deployment;
+  const steps = job.steps;
+  const authIndex = steps.findIndex((step) => step.id === 'deployer');
+  const bootstrapIndex = steps.findIndex((step) => step.name === 'Apply the existing bootstrap state first');
+  const appInitIndex = steps.findIndex((step) => step.name === 'Configure the single application root');
+  const bootstrap = steps[bootstrapIndex];
+
+  assert.equal(job.env.BOOTSTRAP_BACKEND_HCL, '${{ vars.GCP_BOOTSTRAP_BACKEND_HCL }}');
+  assert.equal(job.env.BOOTSTRAP_TFVARS, '${{ vars.GCP_BOOTSTRAP_TFVARS }}');
+  assert.ok(authIndex >= 0 && bootstrapIndex > authIndex && appInitIndex > bootstrapIndex);
+  assert.match(bootstrap.run, /terraform -chdir=infra\/bootstrap\/gcp init/);
+  assert.match(bootstrap.run, /bootstrap\.tfplan/);
+  assert.match(bootstrap.run, /terraform -chdir=infra\/bootstrap\/gcp apply/);
+  assert.match(bootstrap.run, /bootstrap_prefix.*application_prefix/s);
+  assert.doesNotMatch(bootstrap.run, /-migrate-state|terraform state rm/);
+  assert.match(steps.at(-1).run, /infra\/bootstrap\/gcp\/\.terraform/);
+  for (const step of steps.filter((entry) => entry.run)) {
+    const syntax = spawnSync('bash', ['-n'], { input: step.run, encoding: 'utf8' });
+    assert.equal(syntax.status, 0, `${step.name}: ${syntax.stderr}`);
+  }
+});
+
 for (const name of ['release', 'infrastructure']) {
   test(`${name} applies only its generated binary, hides failures and removes private files`, () => {
     const steps = Object.values(workflow(name).jobs)[0].steps;
