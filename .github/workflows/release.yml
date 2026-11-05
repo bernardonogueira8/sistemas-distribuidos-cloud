@@ -110,7 +110,27 @@ jobs:
             printf 'Infrastructure preflight failed. Cannot safely preserve the current runtime from state.\n' >&2
             exit 1
           fi
-          terraform -chdir=infra plan -input=false -lock-timeout=5m -out="$RUNNER_TEMP/gcp-deployment/base.tfplan" > "$RUNNER_TEMP/gcp-deployment/base-plan.stdout.log" 2> "$RUNNER_TEMP/gcp-deployment/base-plan.stderr.log" || { printf 'Infrastructure plan failed.\n' >&2; exit 1; }
+          if ! terraform -chdir=infra plan -input=false -lock-timeout=5m -out="$RUNNER_TEMP/gcp-deployment/base.tfplan" > "$RUNNER_TEMP/gcp-deployment/base-plan.stdout.log" 2> "$RUNNER_TEMP/gcp-deployment/base-plan.stderr.log"; then
+            diagnostic=$(awk '
+              /^Error: / {
+                sub(/^Error: /, "")
+                gsub(/"[^"]*"/, "\"[redacted]\"")
+                gsub(/[[:alnum:]_.+-]+@[[:alnum:].-]+/, "[redacted identity]")
+                gsub(/sha256:[[:xdigit:]]+/, "sha256:[redacted]")
+                gsub(/https?:\/\/[^ ]+/, "[redacted URL]")
+                print substr($0, 1, 240)
+                exit
+              }
+            ' "$RUNNER_TEMP/gcp-deployment/base-plan.stderr.log")
+            location=$(awk '/^  on / { sub(/^  /, ""); print; exit }' "$RUNNER_TEMP/gcp-deployment/base-plan.stderr.log")
+            printf 'Infrastructure plan failed.\n' >&2
+            if [[ -n "$diagnostic" ]]; then printf 'Terraform diagnostic: %s\n' "$diagnostic" >&2; fi
+            if [[ -n "$location" ]]; then printf 'Terraform location: %s\n' "$location" >&2; fi
+            if grep -Eiq '403|permission denied|not authorized|unauthorized' "$RUNNER_TEMP/gcp-deployment/base-plan.stderr.log"; then
+              printf 'Terraform error category: GCP API authorization or permission failure.\n' >&2
+            fi
+            exit 1
+          fi
       - name: Apply the exact infrastructure plan before publishing
         id: base-apply
         shell: bash

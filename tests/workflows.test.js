@@ -89,7 +89,10 @@ test('release base plan preserves runtime, supports first deployment and fails c
           test "$5" = "-out=$RUNNER_TEMP/gcp-deployment/base.tfplan" || return 92
           printf 'private base binary' > "$RUNNER_TEMP/gcp-deployment/base.tfplan"
           printf 'sensitive plan diagnostic\n' >&2
-          if [[ "$FAIL_STAGE" == plan ]]; then return 8; fi
+          if [[ "$FAIL_STAGE" == plan ]]; then
+            printf 'Error: GCP API permission denied for "secret-project" and deployer@example.test\n  on infra/main.tf line 42, in resource\n' >&2
+            return 8
+          fi
           ;;
         apply)
           test "$#" -eq 5 || return 93
@@ -145,6 +148,12 @@ test('release base plan preserves runtime, supports first deployment and fails c
       });
       assert.equal(result.status === 0, Boolean(scenario.success), `${JSON.stringify(scenario)}: ${result.stderr}`);
       assert.doesNotMatch(result.stdout + result.stderr, /sensitive|private base binary/);
+      if (scenario.failStage === 'plan') {
+        assert.match(result.stderr, /Terraform diagnostic: GCP API permission denied for "\[redacted\]" and \[redacted identity\]/);
+        assert.match(result.stderr, /Terraform location: on infra\/main\.tf line 42/);
+        assert.match(result.stderr, /GCP API authorization or permission failure/);
+        assert.doesNotMatch(result.stdout + result.stderr, /secret-project|deployer@example\.test/);
+      }
       assert.equal(result.stdout.includes('READY_TO_PUBLISH'), Boolean(scenario.success));
       const calls = fs.readFileSync(trace, 'utf8').trim().split('\n');
       if (scenario.success) assert.deepEqual(calls, scenario.partialImage ? ['output', 'state', 'state', 'plan', 'apply', 'output'] : scenario.enabled === 'true' ? ['output', 'plan', 'apply', 'output'] : ['output', 'state', 'plan', 'apply', 'output']);
